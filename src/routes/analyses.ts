@@ -17,11 +17,11 @@ const analysisSchema = z.object({
 });
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
-  const { companyId } = req.query;
+  const companyId = req.query.companyId as string | undefined;
   const analyses = await prisma.analysis.findMany({
     where: {
-      userId: req.userId,
-      ...(companyId ? { companyId: String(companyId) } : {}),
+      userId: req.userId!,
+      ...(companyId ? { companyId } : {}),
     },
     orderBy: { createdAt: "desc" },
     include: { company: { select: { razaoSocial: true, nomeFantasia: true } } },
@@ -34,7 +34,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
   const company = await prisma.company.findFirst({
-    where: { id: parsed.data.companyId, userId: req.userId },
+    where: { id: parsed.data.companyId, userId: req.userId! },
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
@@ -46,7 +46,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await prisma.analysis.findFirst({
-    where: { id: req.params.id, userId: req.userId },
+    where: { id: req.params.id, userId: req.userId! },
     include: {
       company: true,
       documents: { orderBy: { createdAt: "asc" } },
@@ -66,7 +66,7 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
 // Endpoint principal: dispara extração dos documentos + geração da análise com Claude
 router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await prisma.analysis.findFirst({
-    where: { id: req.params.id, userId: req.userId },
+    where: { id: req.params.id, userId: req.userId! },
     include: { company: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }

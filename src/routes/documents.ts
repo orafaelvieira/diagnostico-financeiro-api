@@ -29,12 +29,13 @@ const uploadSchema = z.object({
 });
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
-  const { analysisId, companyId } = req.query;
+  const analysisId = req.query.analysisId as string | undefined;
+  const companyId = req.query.companyId as string | undefined;
   const documents = await prisma.document.findMany({
     where: {
-      company: { userId: req.userId },
-      ...(analysisId ? { analysisId: String(analysisId) } : {}),
-      ...(companyId ? { companyId: String(companyId) } : {}),
+      company: { userId: req.userId! },
+      ...(analysisId ? { analysisId } : {}),
+      ...(companyId ? { companyId } : {}),
     },
     orderBy: { createdAt: "desc" },
   });
@@ -50,7 +51,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   const { analysisId, companyId, tipo, competencia, moeda } = parsed.data;
 
   // Verifica que a análise pertence ao usuário
-  const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, userId: req.userId } });
+  const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, userId: req.userId! } });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
 
   const ext = req.file.originalname.split(".").pop();
@@ -80,7 +81,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
 
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const doc = await prisma.document.findFirst({
-    where: { id: req.params.id, company: { userId: req.userId } },
+    where: { id: req.params.id, company: { userId: req.userId! } },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
 
