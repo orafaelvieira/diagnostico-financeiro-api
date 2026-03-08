@@ -1,0 +1,49 @@
+name: diagnostico-financeiro-api
+region: nyc
+
+services:
+  - name: api
+    github:
+      repo: orafaelvieira/diagnostico-financeiro-api
+      branch: main
+      deploy_on_push: true
+    build_command: npm install && npm run build && npx prisma generate
+    run_command: npm start
+    http_port: 3001
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    health_check:
+      http_path: /health
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+      - key: JWT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: ANTHROPIC_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: FRONTEND_URL
+        scope: RUN_TIME
+        value: https://diagnostico-financeiro-app.ondigitalocean.app
+      - key: SPACES_ENDPOINT
+        scope: RUN_TIME
+        type: SECRET
+      - key: SPACES_REGION
+        scope: RUN_TIME
+        value: nyc3
+      - key: SPACES_BUCKET
+        scope: RUN_TIME
+        type: SECRET
+      - key: SPACES_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: SPACES_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: PORT
+        scope: RUN_TIME
+        value: "3001"
+    routes:
+      - path: /

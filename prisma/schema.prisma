@@ -1,0 +1,81 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String     @id @default(uuid())
+  email         String     @unique
+  name          String
+  passwordHash  String     @map("password_hash")
+  workspaceType String     @default("consultoria") @map("workspace_type")
+  createdAt     DateTime   @default(now()) @map("created_at")
+
+  companies Company[]
+  analyses  Analysis[]
+
+  @@map("users")
+}
+
+model Company {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  razaoSocial  String   @map("razao_social")
+  nomeFantasia String?  @map("nome_fantasia")
+  cnpj         String?
+  setor        String?
+  porte        String?
+  uf           String?
+  status       String   @default("ativo")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  analyses  Analysis[]
+  documents Document[]
+
+  @@map("companies")
+}
+
+model Analysis {
+  id        String   @id @default(uuid())
+  companyId String   @map("company_id")
+  userId    String   @map("user_id")
+  nome      String
+  periodo   String?
+  tipo      String   @default("Completa")
+  status    String   @default("Rascunho")
+  confianca Int?
+  resultado Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id])
+  documents Document[]
+
+  @@map("analyses")
+}
+
+model Document {
+  id             String   @id @default(uuid())
+  analysisId     String   @map("analysis_id")
+  companyId      String   @map("company_id")
+  nome           String
+  tipo           String
+  competencia    String?
+  moeda          String   @default("BRL")
+  status         String   @default("Pendente")
+  confianca      Int?
+  storagePath    String?  @map("storage_path")
+  dadosExtraidos Json?    @map("dados_extraidos")
+  tamanho        String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  company  Company  @relation(fields: [companyId], references: [id])
+
+  @@map("documents")
+}
