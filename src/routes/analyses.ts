@@ -45,8 +45,9 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 });
 
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id: req.params.id, userId: req.userId! },
+    where: { id, userId: req.userId! },
     include: {
       company: true,
       documents: { orderBy: { createdAt: "asc" } },
@@ -57,16 +58,18 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 });
 
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
-  const existing = await prisma.analysis.findFirst({ where: { id: req.params.id, userId: req.userId } });
+  const id = req.params.id as string;
+  const existing = await prisma.analysis.findFirst({ where: { id, userId: req.userId! } });
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
-  await prisma.analysis.delete({ where: { id: req.params.id } });
+  await prisma.analysis.delete({ where: { id } });
   res.status(204).send();
 });
 
 // Endpoint principal: dispara extração dos documentos + geração da análise com Claude
 router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id: req.params.id, userId: req.userId! },
+    where: { id, userId: req.userId! },
     include: { company: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }

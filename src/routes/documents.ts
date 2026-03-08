@@ -80,13 +80,14 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
 });
 
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
   const doc = await prisma.document.findFirst({
-    where: { id: req.params.id, company: { userId: req.userId! } },
+    where: { id, company: { userId: req.userId! } },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
 
   if (doc.storagePath) await deleteFile(doc.storagePath);
-  await prisma.document.delete({ where: { id: req.params.id } });
+  await prisma.document.delete({ where: { id } });
   res.status(204).send();
 });
 

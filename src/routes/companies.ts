@@ -35,8 +35,9 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 });
 
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
   const company = await prisma.company.findFirst({
-    where: { id: req.params.id, userId: req.userId! },
+    where: { id, userId: req.userId! },
     include: { analyses: { orderBy: { createdAt: "desc" }, take: 10 } },
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
@@ -44,21 +45,23 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 });
 
 router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
-  const existing = await prisma.company.findFirst({ where: { id: req.params.id, userId: req.userId! } });
+  const id = req.params.id as string;
+  const existing = await prisma.company.findFirst({ where: { id, userId: req.userId! } });
   if (!existing) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
   const parsed = companySchema.partial().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  const company = await prisma.company.update({ where: { id: req.params.id }, data: parsed.data });
+  const company = await prisma.company.update({ where: { id }, data: parsed.data });
   res.json(company);
 });
 
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
-  const existing = await prisma.company.findFirst({ where: { id: req.params.id, userId: req.userId! } });
+  const id = req.params.id as string;
+  const existing = await prisma.company.findFirst({ where: { id, userId: req.userId! } });
   if (!existing) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
-  await prisma.company.delete({ where: { id: req.params.id } });
+  await prisma.company.delete({ where: { id } });
   res.status(204).send();
 });
 
