@@ -95,6 +95,29 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
   };
 }
 
+/**
+ * Converte ExtractedRow[] + periodos de volta para o formato texto
+ * pipe-delimited que o Claude espera. Usado quando dados foram
+ * editados manualmente e precisam ser reprocessados.
+ */
+export function dadosExtraidosToRaw(
+  tipo: string,
+  linhas: ExtractedRow[],
+  periodos: string[]
+): string {
+  if (linhas.length === 0) return `${tipo}\n(sem dados estruturados)`;
+  const header = ["Conta", ...periodos].join(" | ");
+  const separator = "---";
+  const dataRows = linhas.map((l) => {
+    const vals = periodos.map((p) => {
+      const v = l.valores[p];
+      return v !== undefined ? v.toLocaleString("pt-BR") : "-";
+    });
+    return [l.conta, ...vals].join(" | ");
+  });
+  return [tipo, header, separator, ...dataRows].join("\n");
+}
+
 export async function parseDocument(
   buffer: Buffer,
   filename: string,

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile } from "../services/storage";
-import { parseDocument } from "../services/parser";
+import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { generateAnalysis } from "../services/claude";
 
 const router = Router();
@@ -82,10 +82,21 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // 1. Atualiza status para "Extraindo"
     await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Extraindo" } });
 
-    // 2. Baixa e parseia cada documento
-    const parsedDocs = await Promise.all(
+    // 2. Baixa e parseia cada documento (ou usa dados editados manualmente)
+    const parsedDocs: ParsedDocument[] = await Promise.all(
       analysis.documents.map(async (doc) => {
         try {
+          // Se o documento foi editado manualmente, usar os dados editados
+          if (doc.editadoManualmente && doc.dadosExtraidos) {
+            const dados = doc.dadosExtraidos as any;
+            const linhas: ExtractedRow[] = dados.linhas || (Array.isArray(dados) ? dados : []);
+            const periodos: string[] = dados.periodos ||
+              (linhas.length > 0 ? Object.keys(linhas[0].valores) : []);
+            const raw = dadosExtraidosToRaw(doc.tipo, linhas, periodos);
+            return { tipo: doc.tipo, linhas, periodos, raw };
+          }
+
+          // Caso contrário, re-parsear o arquivo original
           const buffer = await downloadFile(doc.storagePath!);
           const parsed = await parseDocument(buffer, doc.nome, doc.tipo);
 

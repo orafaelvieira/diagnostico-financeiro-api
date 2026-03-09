@@ -70,8 +70,9 @@ model Document {
   status         String   @default("Pendente")
   confianca      Int?
   storagePath    String?  @map("storage_path")
-  dadosExtraidos Json?    @map("dados_extraidos")
-  tamanho        String?
+  dadosExtraidos     Json?    @map("dados_extraidos")
+  editadoManualmente Boolean  @default(false) @map("editado_manualmente")
+  tamanho            String?
   createdAt      DateTime @default(now()) @map("created_at")
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)

@@ -79,6 +79,37 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   res.status(201).json(doc);
 });
 
+// Salvar dados brutos editados manualmente
+const dadosExtraidosSchema = z.object({
+  linhas: z.array(z.object({
+    conta: z.string(),
+    valores: z.record(z.string(), z.number()),
+  })),
+  periodos: z.array(z.string()),
+});
+
+router.put("/:id/dados-extraidos", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const parsed = dadosExtraidosSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+
+  const doc = await prisma.document.findFirst({
+    where: { id, company: { userId: req.userId! } },
+  });
+  if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+
+  const updated = await prisma.document.update({
+    where: { id },
+    data: {
+      dadosExtraidos: { linhas: parsed.data.linhas, periodos: parsed.data.periodos },
+      editadoManualmente: true,
+      status: "Processado",
+    },
+  });
+
+  res.json(updated);
+});
+
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const doc = await prisma.document.findFirst({
