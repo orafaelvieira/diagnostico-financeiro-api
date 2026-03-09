@@ -23,7 +23,7 @@ const upload = multer({
 const uploadSchema = z.object({
   analysisId: z.string().uuid(),
   companyId: z.string().uuid(),
-  tipo: z.enum(["DRE", "Balanço Patrimonial", "Balancete"]),
+  tipo: z.enum(["DRE", "Balanço Patrimonial", "Balancete", "Outro"]),
   competencia: z.string().optional(),
   moeda: z.string().default("BRL"),
 });
