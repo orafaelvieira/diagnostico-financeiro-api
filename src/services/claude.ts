@@ -105,7 +105,14 @@ Regras:
     messages: [{ role: "user", content: prompt }],
   });
 
-  const text = message.content[0].type === "text" ? message.content[0].text : "";
+  let text = message.content[0].type === "text" ? message.content[0].text : "";
+
+  // Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+  text = text.trim();
+  if (text.startsWith("```")) {
+    text = text.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+  }
+
   const result: AnalysisResult = JSON.parse(text);
   return result;
 }
