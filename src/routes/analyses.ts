@@ -102,7 +102,11 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
           await prisma.document.update({
             where: { id: doc.id },
-            data: { dadosExtraidos: parsed.linhas as object[], status: "Processado", confianca: 85 },
+            data: {
+              dadosExtraidos: { linhas: parsed.linhas, periodos: parsed.periodos } as any,
+              status: "Processado",
+              confianca: 85,
+            },
           });
           return parsed;
         } catch (err) {

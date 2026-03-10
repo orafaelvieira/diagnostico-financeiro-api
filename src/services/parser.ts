@@ -86,13 +86,84 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
   const data = await pdfParse(buffer);
   const text = data.text as string;
 
-  // Para PDF, envia o texto bruto para o Claude — ele extrai os valores
-  return {
-    tipo,
-    linhas: [],
-    periodos: [],
-    raw: `${tipo}\n${text.slice(0, 8000)}`, // Limita a 8k chars por documento
-  };
+  // Tenta extrair período do cabeçalho (ex: "Encerrado em: 31/12/2023")
+  const periodoMatch = text.match(/[Ee]ncerrad[oa]\s+em[:\s]+(\d{2}\/\d{2}\/\d{4})/);
+  const periodo = periodoMatch ? periodoMatch[1] : detectPeriodFromText(text);
+
+  // Tenta extrair linhas estruturadas do texto do PDF
+  const linhas = extractStructuredLines(text);
+
+  const periodos = periodo ? [periodo] : [];
+
+  // Atribui o período detectado como chave dos valores
+  if (periodo && linhas.length > 0) {
+    for (const l of linhas) {
+      const keys = Object.keys(l.valores);
+      if (keys.length === 1 && keys[0] === "_val") {
+        l.valores[periodo] = l.valores["_val"];
+        delete l.valores["_val"];
+      }
+    }
+  }
+
+  // Gera raw text — sempre inclui o texto original para o Claude
+  const raw = `${tipo}\n${text.slice(0, 8000)}`;
+
+  return { tipo, linhas, periodos, raw };
+}
+
+/**
+ * Detecta período do texto quando não encontra "Encerrado em"
+ */
+function detectPeriodFromText(text: string): string {
+  // Tenta "Data: DD/MM/YYYY"
+  const dataMatch = text.match(/Data[:\s]+(\d{2}\/\d{2}\/\d{4})/);
+  if (dataMatch) return dataMatch[1];
+  // Tenta ano isolado tipo "2023" ou "2024"
+  const anoMatch = text.match(/20[2-3]\d/);
+  if (anoMatch) return anoMatch[0];
+  return "";
+}
+
+/**
+ * Extrai linhas estruturadas de um PDF financeiro brasileiro.
+ * Formato esperado: CONTA_NAME    VALOR (ex: "ATIVO CIRCULANTE    488.441,31")
+ * Retorna ExtractedRow[] com chave temporária "_val" para o valor.
+ */
+function extractStructuredLines(text: string): ExtractedRow[] {
+  const lines = text.split("\n");
+  const result: ExtractedRow[] = [];
+
+  // Regex para valor brasileiro no final da linha: -?123.456,78
+  const valorRegex = /(-?[\d.]+,\d{2})\s*$/;
+
+  // Linhas a ignorar (cabeçalhos, rodapés, totais de conferência)
+  const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS)/i;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length < 3) continue;
+    if (skipPatterns.test(trimmed)) continue;
+
+    const match = trimmed.match(valorRegex);
+    if (!match) continue;
+
+    // Extrai o nome da conta (tudo antes do valor)
+    const valorStr = match[1];
+    const conta = trimmed.slice(0, trimmed.lastIndexOf(valorStr)).trim();
+
+    if (!conta || conta.length < 2) continue;
+    // Ignora linhas que parecem ser apenas "Contabilidade Balanço Patrimonial" etc
+    if (/^Contabilidade\b/i.test(conta)) continue;
+
+    // Converte valor BR para número
+    const num = parseFloat(valorStr.replace(/\./g, "").replace(",", "."));
+    if (isNaN(num)) continue;
+
+    result.push({ conta, valores: { "_val": num } });
+  }
+
+  return result;
 }
 
 /**
