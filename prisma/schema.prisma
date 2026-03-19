@@ -49,8 +49,9 @@ model Analysis {
   tipo      String   @default("Completa")
   status    String   @default("Rascunho")
   confianca Int?
-  resultado Json?
-  createdAt DateTime @default(now()) @map("created_at")
+  resultado         Json?
+  dadosEstruturados Json?    @map("dados_estruturados")
+  createdAt         DateTime @default(now()) @map("created_at")
 
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user      User       @relation(fields: [userId], references: [id])

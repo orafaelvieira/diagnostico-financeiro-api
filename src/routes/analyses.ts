@@ -5,6 +5,9 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { generateAnalysis } from "../services/claude";
+import { mapExtractedToBP, mapExtractedToDRE, detectPeriodos } from "../services/account-mapper";
+import { calculateIndicators } from "../services/indicator-calculator";
+import type { DadosEstruturados, BPLineItem, DRELineItem } from "../types/financial";
 
 const router = Router();
 router.use(requireAuth);
@@ -116,6 +119,46 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       })
     );
 
+    // 2.5 Compute structured financial data (BP, DRE, Indicadores)
+    const allPeriodos = detectPeriodos(parsedDocs);
+    let structuredBP: BPLineItem[] = [];
+    let structuredDRE: DRELineItem[] = [];
+
+    for (const doc of parsedDocs) {
+      const tipoNorm = doc.tipo.toLowerCase();
+      if (tipoNorm.includes("balan") || tipoNorm.includes("balancete")) {
+        structuredBP = mapExtractedToBP(doc.linhas);
+      }
+      if (tipoNorm.includes("dre") || tipoNorm.includes("resultado") || tipoNorm.includes("demonstra")) {
+        structuredDRE = mapExtractedToDRE(doc.linhas);
+      }
+    }
+
+    // If we got a Balancete, try to extract both BP and DRE from it
+    if (structuredBP.length === 0 && structuredDRE.length === 0) {
+      for (const doc of parsedDocs) {
+        if (doc.linhas.length > 0) {
+          structuredBP = mapExtractedToBP(doc.linhas);
+          structuredDRE = mapExtractedToDRE(doc.linhas);
+        }
+      }
+    }
+
+    const indicadores = calculateIndicators(structuredBP, structuredDRE, allPeriodos);
+
+    const dadosEstruturados: DadosEstruturados = {
+      bp: structuredBP,
+      dre: structuredDRE,
+      indicadores,
+      periodos: allPeriodos,
+      version: 1,
+    };
+
+    await prisma.analysis.update({
+      where: { id: analysis.id },
+      data: { dadosEstruturados: dadosEstruturados as any },
+    });
+
     // 3. Atualiza status para "Gerando diagnóstico"
     await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Gerando diagnóstico" } });
 
@@ -146,6 +189,108 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     console.error("Erro ao processar análise:", err);
     res.status(500).json({ error: "Erro ao processar análise", detail: String(err) });
   }
+});
+
+// === Structured Financial Data Endpoints ===
+
+router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    select: { dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  if (!analysis.dadosEstruturados) { res.json({ bp: [], dre: [], indicadores: [], periodos: [], version: 1 }); return; }
+  res.json(analysis.dadosEstruturados);
+});
+
+router.put("/:id/dados-estruturados/bp", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    select: { dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
+  dados.bp = req.body.linhas;
+
+  await prisma.analysis.update({
+    where: { id },
+    data: { dadosEstruturados: dados },
+  });
+  res.json({ ok: true });
+});
+
+router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    select: { dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
+  dados.dre = req.body.linhas;
+
+  await prisma.analysis.update({
+    where: { id },
+    data: { dadosEstruturados: dados },
+  });
+  res.json({ ok: true });
+});
+
+router.put("/:id/dados-estruturados/indicadores/override", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    select: { dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const { nome, periodo, valor } = req.body;
+  const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
+
+  const indicador = dados.indicadores?.find((i: any) => i.nome === nome);
+  if (indicador) {
+    if (!indicador.overrides) indicador.overrides = {};
+    indicador.overrides[periodo] = valor;
+  }
+
+  await prisma.analysis.update({
+    where: { id },
+    data: { dadosEstruturados: dados },
+  });
+  res.json({ ok: true });
+});
+
+router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    select: { dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
+
+  const dados = analysis.dadosEstruturados as any as DadosEstruturados;
+  const newIndicadores = calculateIndicators(dados.bp, dados.dre, dados.periodos);
+
+  // Preserve user overrides from old indicators
+  for (const newInd of newIndicadores) {
+    const oldInd = dados.indicadores?.find((i: any) => i.nome === newInd.nome);
+    if (oldInd?.overrides) {
+      newInd.overrides = oldInd.overrides;
+    }
+  }
+
+  dados.indicadores = newIndicadores;
+
+  await prisma.analysis.update({
+    where: { id },
+    data: { dadosEstruturados: dados as any },
+  });
+  res.json(dados);
 });
 
 export default router;
