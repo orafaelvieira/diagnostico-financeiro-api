@@ -86,22 +86,29 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
   const data = await pdfParse(buffer);
   const text = data.text as string;
 
-  // Tenta extrair período do cabeçalho (ex: "Encerrado em: 31/12/2023")
-  const periodoMatch = text.match(/[Ee]ncerrad[oa]\s+em[:\s]+(\d{2}\/\d{2}\/\d{4})/);
-  const periodo = periodoMatch ? periodoMatch[1] : detectPeriodFromText(text);
+  // Detect periods from text
+  const periodos = detectPeriodsFromPDF(text);
 
-  // Tenta extrair linhas estruturadas do texto do PDF
-  const linhas = extractStructuredLines(text);
+  // Try structured extraction first (multi-column PDF with separated names/values)
+  let linhas = extractMultiColumnPDF(text, periodos);
 
-  const periodos = periodo ? [periodo] : [];
+  // If multi-column extraction didn't work well, fall back to single-line extraction
+  if (linhas.length === 0) {
+    linhas = extractInlinePDF(text, periodos);
+  }
 
-  // Atribui o período detectado como chave dos valores
-  if (periodo && linhas.length > 0) {
-    for (const l of linhas) {
-      const keys = Object.keys(l.valores);
-      if (keys.length === 1 && keys[0] === "_val") {
-        l.valores[periodo] = l.valores["_val"];
-        delete l.valores["_val"];
+  // Fall back to legacy single-value extraction
+  if (linhas.length === 0) {
+    linhas = extractStructuredLines(text);
+    // Assign period
+    const periodo = periodos[0] || "";
+    if (periodo && linhas.length > 0) {
+      for (const l of linhas) {
+        const keys = Object.keys(l.valores);
+        if (keys.length === 1 && keys[0] === "_val") {
+          l.valores[periodo] = l.valores["_val"];
+          delete l.valores["_val"];
+        }
       }
     }
   }
@@ -113,20 +120,262 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
 }
 
 /**
- * Detecta período do texto quando não encontra "Encerrado em"
+ * Detect periods from PDF text. Returns sorted period strings.
+ * Looks for patterns like "31/12/2023", "2023", "2024", etc.
  */
-function detectPeriodFromText(text: string): string {
-  // Tenta "Data: DD/MM/YYYY"
-  const dataMatch = text.match(/Data[:\s]+(\d{2}\/\d{2}\/\d{4})/);
-  if (dataMatch) return dataMatch[1];
-  // Tenta ano isolado tipo "2023" ou "2024"
-  const anoMatch = text.match(/20[2-3]\d/);
-  if (anoMatch) return anoMatch[0];
-  return "";
+function detectPeriodsFromPDF(text: string): string[] {
+  const periods = new Set<string>();
+
+  // Pattern: "31/12/2023" - Brazilian date format
+  const dateMatches = text.matchAll(/(\d{2}\/\d{2}\/(20\d{2}))/g);
+  for (const m of dateMatches) {
+    periods.add(m[1]); // Full date like "31/12/2023"
+  }
+
+  // If we found dates, return them sorted
+  if (periods.size >= 1) {
+    return Array.from(periods).sort((a, b) => {
+      const ya = parseInt(a.slice(-4));
+      const yb = parseInt(b.slice(-4));
+      return ya - yb;
+    });
+  }
+
+  // Fallback: "Encerrado em DD/MM/YYYY"
+  const encerradoMatch = text.match(/[Ee]ncerrad[oa]\s+em[:\s]+(\d{2}\/\d{2}\/\d{4})/);
+  if (encerradoMatch) {
+    return [encerradoMatch[1]];
+  }
+
+  // Fallback: standalone years
+  const yearMatches = text.matchAll(/\b(20[2-3]\d)\b/g);
+  const years = new Set<string>();
+  for (const m of yearMatches) years.add(m[1]);
+  if (years.size >= 1) {
+    return Array.from(years).sort();
+  }
+
+  return [];
 }
 
 /**
- * Extrai linhas estruturadas de um PDF financeiro brasileiro.
+ * Parse Brazilian number format: "1.234.567,89" or "(1.234.567,89)" for negative
+ */
+function parseBRNumber(s: string): number | null {
+  const trimmed = s.trim();
+  if (!trimmed) return null;
+
+  // Check for negative in parentheses: (1.234,56)
+  const isNeg = trimmed.startsWith("(") && trimmed.endsWith(")");
+  const clean = trimmed
+    .replace(/[()]/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+  const num = parseFloat(clean);
+  if (isNaN(num)) return null;
+  return isNeg ? -num : num;
+}
+
+/**
+ * Extract data from multi-column PDFs where account names and values
+ * are in separate blocks (common in Brazilian accounting software PDFs).
+ *
+ * These PDFs have structure like:
+ * Page 1: Values block (just numbers), then Names block (code + name)
+ * Header somewhere with "Saldo período 31/12/2023" etc.
+ */
+function extractMultiColumnPDF(text: string, periodos: string[]): ExtractedRow[] {
+  const lines = text.split("\n");
+  if (periodos.length < 1) return [];
+
+  // Detect if this is a multi-column PDF by looking for the pattern:
+  // Lines with ONLY numbers (value pairs) followed by lines with account codes
+  const accountCodeRegex = /^\s*\d+\s+[\d.]+\s+(.+)$/; // e.g., "1067 1.02.03 IMOBILIZADO"
+  const valueLineRegex = /^[\s(]*-?[\d.]+,\d{2}/; // starts with a BR number
+
+  const valueLines: string[] = [];
+  const nameLines: Array<{ code: string; name: string; indent: number }> = [];
+  let hasCodeLines = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Check if it's an account code line (e.g., "1067 1.02.03 IMOBILIZADO")
+    const codeMatch = trimmed.match(/^\s*(\d+)\s+([\d.]+)\s+(.+)$/);
+    if (codeMatch) {
+      hasCodeLines = true;
+      const indent = line.length - line.trimStart().length;
+      nameLines.push({
+        code: codeMatch[2],
+        name: codeMatch[3].trim(),
+        indent,
+      });
+    }
+  }
+
+  if (!hasCodeLines || nameLines.length < 5) return [];
+
+  // This IS a multi-column PDF. Now we need to collect value blocks and correlate.
+  // The approach: find value-only lines between headers and name blocks,
+  // then reverse-map to names based on the hierarchical order.
+
+  // The names come in REVERSE order in the PDF (bottom-to-top within each page).
+  // We need to reverse them to get top-to-bottom order.
+  // But they're also grouped by page, so we need to handle page breaks.
+
+  // Simpler approach: Parse account hierarchy from code numbers and build the structure.
+  // The code numbers tell us the hierarchy (1.01 > 1.01.01 > 1.01.01.01).
+  // Sort by code number to get the correct order.
+  nameLines.sort((a, b) => {
+    const aParts = a.code.split(".").map(Number);
+    const bParts = b.code.split(".").map(Number);
+    for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+      const av = aParts[i] ?? 0;
+      const bv = bParts[i] ?? 0;
+      if (av !== bv) return av - bv;
+    }
+    return 0;
+  });
+
+  // Now collect all value-pair lines (lines with 2+ BR numbers and no letters)
+  // These are blocks of pure numbers between page headers
+  type ValuePair = number[];
+  const allValueBlocks: ValuePair[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Skip non-value lines
+    if (/[a-zA-ZÀ-ú]/.test(trimmed)) continue;
+
+    // Extract all BR numbers from this line
+    const numbers: number[] = [];
+    // Match: optional negative sign or parens, digits with dots, comma, 2 decimal digits
+    const numMatches = trimmed.matchAll(/(\(?\-?[\d.]+,\d{2}\)?)/g);
+    for (const m of numMatches) {
+      const n = parseBRNumber(m[1]);
+      if (n !== null) numbers.push(n);
+    }
+
+    if (numbers.length >= 1) {
+      allValueBlocks.push(numbers);
+    }
+  }
+
+  // Now we need to correlate value blocks with name lines.
+  // In multi-column PDFs, the number of value lines per page should match
+  // the number of name lines. But names may span multiple pages.
+  // The simplest heuristic: if nameLines.length == allValueBlocks.length, direct mapping.
+
+  if (nameLines.length === 0 || allValueBlocks.length === 0) return [];
+
+  // If counts match (or close), map 1:1
+  const result: ExtractedRow[] = [];
+
+  if (Math.abs(nameLines.length - allValueBlocks.length) <= 3) {
+    // Direct 1:1 mapping
+    const count = Math.min(nameLines.length, allValueBlocks.length);
+    for (let i = 0; i < count; i++) {
+      const name = nameLines[i];
+      const vals = allValueBlocks[i];
+      const valores: Record<string, number> = {};
+
+      // Map values to periods
+      for (let j = 0; j < Math.min(vals.length, periodos.length); j++) {
+        valores[periodos[j]] = vals[j];
+      }
+
+      if (Object.keys(valores).length > 0) {
+        result.push({ conta: name.name, valores });
+      }
+    }
+  } else {
+    // Counts don't match — this is common when value blocks include subtotals
+    // that don't have corresponding name lines, or vice versa.
+    // Fall back to inline extraction.
+    return [];
+  }
+
+  return result;
+}
+
+/**
+ * Extract data from PDFs where account name and values are on the same line,
+ * but concatenated without spaces.
+ * Example: "RECEITA BRUTA DE VENDAS E SERVIÇOS105.491.499,80109.689.157,06"
+ */
+function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
+  const lines = text.split("\n");
+  const result: ExtractedRow[] = [];
+
+  // Skip patterns
+  const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS|ROBERTO|MARCO|Diretor|Contador|INSCR|LACTOBOM|DEMONSTRATIVO|BALANCO|Conta\d|ContaSaldo)/i;
+
+  // BR number pattern: optional parens/negative, digits with dots, comma, 2 decimals
+  const brNumPattern = /\(?-?[\d.]+,\d{2}\)?/g;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length < 3) continue;
+    if (skipPatterns.test(trimmed)) continue;
+
+    // Find all BR numbers in the line
+    const numMatches = [...trimmed.matchAll(brNumPattern)];
+    if (numMatches.length === 0) continue;
+
+    // Extract account name: everything before the first number
+    const firstNumIdx = numMatches[0].index!;
+    let conta = trimmed.slice(0, firstNumIdx).trim();
+
+    // Skip lines that are just numbers (no account name)
+    if (!conta || conta.length < 2) continue;
+    // Skip lines where "conta" is itself a number-like string
+    if (/^[\d.,\-()]+$/.test(conta)) continue;
+    // Skip header/footer lines
+    if (/^(CNPJ|Toledo|72\.\d)/i.test(conta)) continue;
+
+    // Parse all numbers from the line
+    const values: number[] = [];
+    for (const m of numMatches) {
+      const n = parseBRNumber(m[0]);
+      if (n !== null) values.push(n);
+    }
+
+    if (values.length === 0) continue;
+
+    // Map values to periods
+    const valores: Record<string, number> = {};
+    if (values.length >= 2 && periodos.length >= 2) {
+      // Multi-period: map each value to its period
+      for (let i = 0; i < Math.min(values.length, periodos.length); i++) {
+        valores[periodos[i]] = values[i];
+      }
+    } else if (values.length === 1 && periodos.length >= 1) {
+      // Single value: assign to first period
+      valores[periodos[0]] = values[0];
+    } else if (values.length === 1) {
+      // No detected period, use placeholder
+      valores["_val"] = values[0];
+    } else if (values.length >= 2 && periodos.length === 1) {
+      // Multiple values but only one period known — use first value
+      valores[periodos[0]] = values[0];
+    } else {
+      // Multiple values but no period info — use index
+      values.forEach((v, i) => {
+        valores[`P${i + 1}`] = v;
+      });
+    }
+
+    result.push({ conta, valores });
+  }
+
+  return result;
+}
+
+/**
+ * Legacy: Extrai linhas estruturadas de um PDF financeiro brasileiro.
  * Formato esperado: CONTA_NAME    VALOR (ex: "ATIVO CIRCULANTE    488.441,31")
  * Retorna ExtractedRow[] com chave temporária "_val" para o valor.
  */
@@ -153,7 +402,9 @@ function extractStructuredLines(text: string): ExtractedRow[] {
     const conta = trimmed.slice(0, trimmed.lastIndexOf(valorStr)).trim();
 
     if (!conta || conta.length < 2) continue;
-    // Ignora linhas que parecem ser apenas "Contabilidade Balanço Patrimonial" etc
+    // Ignora linhas que parecem ser apenas números
+    if (/^[\d.,\-()]+$/.test(conta)) continue;
+    // Ignora linhas que parecem ser "Contabilidade Balanço Patrimonial" etc
     if (/^Contabilidade\b/i.test(conta)) continue;
 
     // Converte valor BR para número

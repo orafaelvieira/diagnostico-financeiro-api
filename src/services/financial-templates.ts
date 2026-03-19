@@ -151,95 +151,249 @@ export const INDICADORES_TEMPLATE: Array<{
 // Account name aliases for normalization
 // Maps common variations to the canonical name
 export const ACCOUNT_ALIASES: Record<string, string> = {
-  // Ativo
+  // ===== ATIVO =====
+  "A T I V O": "Ativo Total",
+  "ATIVO": "Ativo Total",
+  "TOTAL DO ATIVO": "Ativo Total",
+  "ATIVO TOTAL": "Ativo Total",
+  "Total do Ativo": "Ativo Total",
+  "Total Ativo": "Ativo Total",
+
+  // Ativo Circulante
+  "ATIVO CIRCULANTE": "Ativo Circulante",
+  "Circulante": "Ativo Circulante",
+
+  // Caixa e Equivalentes
   "Disponibilidades": "Caixa e Equivalentes de Caixa",
+  "DISPONIBILIDADES": "Caixa e Equivalentes de Caixa",
+  "DISPONIVEL": "Caixa e Equivalentes de Caixa",
+  "Disponível": "Caixa e Equivalentes de Caixa",
   "Caixa e Bancos": "Caixa e Equivalentes de Caixa",
   "Caixa": "Caixa e Equivalentes de Caixa",
-  "Disponível": "Caixa e Equivalentes de Caixa",
+  "CAIXA": "Caixa e Equivalentes de Caixa",
+  "CAIXA MATRIZ": "Caixa e Equivalentes de Caixa",
   "Bancos Conta Movimento": "Caixa e Equivalentes de Caixa",
+  "BANCOS C/ MOVIMENTO": "Caixa e Equivalentes de Caixa",
+  "BANCO CONTA MOVIMENTO": "Caixa e Equivalentes de Caixa",
+
+  // Aplicações Financeiras
   "Aplicações de Liquidez Imediata": "Aplicações Financeiras",
+  "APLICAÇÃO DE LIQUIDEZ IMEDIATA": "Aplicações Financeiras",
   "Investimentos de Curto Prazo": "Aplicações Financeiras",
+  "BANCO CONTA APLICAÇÃO": "Aplicações Financeiras",
+  "APLICAÇÕES FINANCEIRAS": "Aplicações Financeiras",
+
+  // Contas a Receber
   "Clientes": "Contas a Receber",
+  "CLIENTES A RECEBER": "Contas a Receber",
   "Duplicatas a Receber": "Contas a Receber",
+  "DUPLICATAS A RECEBER": "Contas a Receber",
+  "DUPLICATAS  A RECEBER": "Contas a Receber",
   "Títulos a Receber": "Contas a Receber",
+  "CREDITOS A RECEBER": "Contas a Receber",
+  "CREDITOS": "Contas a Receber",
+  "CRÉDITOS A RECEBER": "Contas a Receber",
+
+  // Estoques
   "Mercadorias": "Estoques",
   "Produtos Acabados": "Estoques",
   "Matérias-Primas": "Estoques",
   "Estoque": "Estoques",
+  "ESTOQUES": "Estoques",
+  "ESTOQUE GERAL": "Estoques",
+
+  // Tributos a Recuperar
   "Impostos a Recuperar": "Tributos a Recuperar",
+  "IMPOSTOS A RECUPERAR": "Tributos a Recuperar",
   "Créditos Tributários": "Tributos a Recuperar",
   "ICMS a Recuperar": "Tributos a Recuperar",
   "PIS a Recuperar": "Tributos a Recuperar",
   "COFINS a Recuperar": "Tributos a Recuperar",
+
+  // Despesas Antecipadas
+  "DESPESAS ANTECIPADAS": "Despesas Antecipadas",
+  "DESPESAS DO EXERCICIO SEGUINTE": "Despesas Antecipadas",
+
+  // Outros Ativos Circulantes
+  "ADIANTAMENTOS CONCEDIDOS": "Outros Ativos Circulantes",
+  "CONTAS TRANSITÓRIAS": "Outros Ativos Circulantes",
+  "PRODUTOS EM TRANSITO": "Outros Ativos Circulantes",
+  "DEPOSITOS JUDICIAIS": "Outros Ativos Circulantes",
+  "EMPRESTIMOS A TERCEIROS": "Outros Ativos Circulantes",
+  "CHEQUES EM COBRANÇA": "Outros Ativos Circulantes",
+
+  // ANC
   "Realizável a Longo Prazo": "Ativo Realizável a Longo Prazo",
   "Ativo Não Circulante": "Ativo Realizável a Longo Prazo",
+  "ATIVO NÃO CIRCULANTE": "Ativo Realizável a Longo Prazo",
+  "ATIVO NÃO - CIRCULANTE": "Ativo Realizável a Longo Prazo",
+  "ATIVO NAO CIRCULANTE": "Ativo Realizável a Longo Prazo",
   "Ativo Permanente": "Ativo Realizável a Longo Prazo",
-  "Imobilizado": "Imobilizado - ALP",
-  "Ativo Imobilizado": "Imobilizado - ALP",
-  "Intangível": "Intangível - ALP",
-  "Ativo Intangível": "Intangível - ALP",
-  "Investimentos": "Investimentos - ALP",
 
-  // Passivo
+  // Investimentos
+  "Investimentos": "Investimentos - ALP",
+  "INVESTIMENTOS": "Investimentos - ALP",
+  "PARTICIPAÇÃO EM OUTRAS EMPRESAS": "Investimentos - ALP",
+  "OUTROS INVESTIMENTOS": "Investimentos - ALP",
+
+  // Imobilizado
+  "Imobilizado": "Imobilizado - ALP",
+  "IMOBILIZADO": "Imobilizado - ALP",
+  "Ativo Imobilizado": "Imobilizado - ALP",
+  "BENS E DIREITOS EM USO": "Imobilizado - ALP",
+
+  // Intangível
+  "Intangível": "Intangível - ALP",
+  "INTANGIVEL": "Intangível - ALP",
+  "Ativo Intangível": "Intangível - ALP",
+  "ATIVOS INTANGIVEIS": "Intangível - ALP",
+
+  // ===== PASSIVO =====
+  "P A S S I V O": "Passivo Total",
+  "PASSIVO": "Passivo Total",
+  "TOTAL DO PASSIVO": "Passivo Total",
+  "PASSIVO TOTAL": "Passivo Total",
+  "Total do Passivo": "Passivo Total",
+  "Total Passivo": "Passivo Total",
+
+  // Passivo Circulante
+  "PASSIVO CIRCULANTE": "Passivo Circulante",
+
+  // Obrigações Sociais e Trabalhistas
   "Obrigações Trabalhistas": "Obrigações Sociais e Trabalhistas",
+  "OBRIGACOES TRABALHISTAS": "Obrigações Sociais e Trabalhistas",
+  "PESSOAL / ENCARGOS": "Obrigações Sociais e Trabalhistas",
+  "PROVISÃO P/DESPESAS C/ PESSOAL": "Obrigações Sociais e Trabalhistas",
   "Salários a Pagar": "Obrigações Sociais e Trabalhistas",
   "Encargos Sociais": "Obrigações Sociais e Trabalhistas",
+
+  // Fornecedores
+  "FORNECEDORES": "Fornecedores",
+
+  // Obrigações Fiscais
   "Obrigações Tributárias": "Obrigações Fiscais",
+  "OBRIGACOES TRIBUTARIAS": "Obrigações Fiscais",
+  "TRIBUTOS A RECOLHER": "Obrigações Fiscais",
   "Impostos a Pagar": "Obrigações Fiscais",
   "Tributos a Pagar": "Obrigações Fiscais",
   "ICMS a Recolher": "Obrigações Fiscais",
   "ISS a Recolher": "Obrigações Fiscais",
+  "PARCELAMENTO DE ICMS": "Obrigações Fiscais",
+
+  // Empréstimos e Financiamentos
   "Financiamentos": "Empréstimos e Financiamentos",
   "Empréstimos": "Empréstimos e Financiamentos",
   "Empréstimos Bancários": "Empréstimos e Financiamentos",
+  "EMPRESTIMOS BANCARIOS": "Empréstimos e Financiamentos",
+  "EMPRESTIMOS E FINANCIAMENTOS": "Empréstimos e Financiamentos",
+  "EMPRESTIMOS DE TERCEIROS": "Empréstimos e Financiamentos",
+
+  // Outros (Passivo)
+  "OUTRAS OBRIGAÇÕES": "Outros",
+  "CONTAS A PAGAR": "Outros",
+  "ADIANTAMENTO RECEBIDO": "Outros",
+
+  // Provisões
+  "PROVISÕES": "Provisões",
+
+  // Passivo Não Circulante
   "Exigível a Longo Prazo": "Passivo Não Circulante",
+  "PASSIVO NÃO CIRCULANTE": "Passivo Não Circulante",
+  "PASSIVO NAO CIRCULANTE": "Passivo Não Circulante",
+  "PASSIVO EXIGIVEL A LONGO PRAZO": "Passivo Não Circulante",
+
+  // Empréstimos LP
   "Financiamentos de Longo Prazo": "Empréstimos e Financiamentos - PLP",
   "Empréstimos de Longo Prazo": "Empréstimos e Financiamentos - PLP",
 
-  // PL
+  // ===== PL =====
   "Capital Social": "Capital Social Realizado",
+  "CAPITAL SOCIAL": "Capital Social Realizado",
   "Capital Subscrito": "Capital Social Realizado",
   "Reserva de Lucros": "Reservas de Lucros",
   "Reserva Legal": "Reservas de Lucros",
   "Reserva de Capital": "Reservas de Capital",
+  "RESERVAS DE CAPITAL": "Reservas de Capital",
+  "RESERVAS": "Reservas de Lucros",
   "Lucros Acumulados": "Lucros/Prejuízos Acumulados",
   "Prejuízos Acumulados": "Lucros/Prejuízos Acumulados",
+  "LUCROS OU PREJUIZOS ACUMULADOS": "Lucros/Prejuízos Acumulados",
   "Resultado Acumulado": "Lucros/Prejuízos Acumulados",
+  "RESULTADO DO EXERCICIO": "Lucros/Prejuízos Acumulados",
+  "Patrimônio Líquido": "Patrimônio Líquido",
+  "PATRIMONIO LIQUIDO": "Patrimônio Líquido",
+  "PATRIMÔNIO LÍQUIDO": "Patrimônio Líquido",
 
-  // DRE
+  // ===== DRE =====
   "Receita Operacional Bruta": "Receita Bruta de Vendas e/ou Serviços",
   "Receita Bruta": "Receita Bruta de Vendas e/ou Serviços",
+  "RECEITA BRUTA DE VENDAS E SERVIÇOS": "Receita Bruta de Vendas e/ou Serviços",
+  "RECEITA BRUTA DE VENDAS E SERVICOS": "Receita Bruta de Vendas e/ou Serviços",
   "Faturamento Bruto": "Receita Bruta de Vendas e/ou Serviços",
+  "VENDA DE MERCADORIAS E PRODUTOS": "Receita Bruta de Vendas e/ou Serviços",
+
   "(-) Deduções": "Deduções da Receita Bruta",
   "Deduções": "Deduções da Receita Bruta",
+  "DEDUCOES DAS VENDAS": "Deduções da Receita Bruta",
+  "DEDUÇÕES DAS VENDAS": "Deduções da Receita Bruta",
   "Impostos sobre Vendas": "Deduções da Receita Bruta",
+  "IMPOSTOS S/FATURAMENTO": "Deduções da Receita Bruta",
+  "ABATIMENTOS E DEVOLUÇÕES SOBRE VENDAS": "Deduções da Receita Bruta",
+
   "Receita Operacional Líquida": "Receita Líquida",
   "Receita Líquida de Vendas": "Receita Líquida",
+  "RECEITA LIQUIDA": "Receita Líquida",
+
   "CMV": "Custo Operacional",
   "CPV": "Custo Operacional",
   "Custo das Mercadorias Vendidas": "Custo Operacional",
   "Custo dos Produtos Vendidos": "Custo Operacional",
+  "CUSTO PRODUTOS VENDIDOS": "Custo Operacional",
   "Custo dos Serviços Prestados": "Custo Operacional",
+
   "Lucro Bruto": "Resultado Bruto",
   "Resultado Operacional Bruto": "Resultado Bruto",
+  "RESULTADO BRUTO": "Resultado Bruto",
+
   "Despesas Administrativas": "Despesas Gerais e Administrativas",
   "Despesas Gerais": "Despesas Gerais e Administrativas",
+  "DESPESAS GERAIS": "Despesas Gerais e Administrativas",
+  "DESPESAS OPERACIONAIS": "Despesas Gerais e Administrativas",
+  "DESPESAS C/ PESSOAL": "Despesas Gerais e Administrativas",
+
   "Despesas com Vendas": "Despesas Com Vendas",
   "Despesas Comerciais": "Despesas Com Vendas",
+  "DESPESAS COMERCIAIS": "Despesas Com Vendas",
+  "DESPESAS COM TRANSPORTES": "Despesas Com Vendas",
+
   "Lucro Operacional": "Resultado Operacional",
   "EBIT": "Resultado Operacional",
   "Resultado Operacional Líquido": "Resultado Operacional",
+
+  "OUTRAS RECEITAS OPERACIONAIS": "Outras Receitas Operacionais",
+  "OUTRAS RECEITAS": "Outras Receitas Operacionais",
+
+  "OUTRAS DESPESAS OPERACIONAIS": "Outras Despesas Operacionais",
+
   "Equivalência Patrimonial": "Resultado da Equivalência Patrimonial",
   "Resultado Financeiro Líquido": "Resultado Financeiro",
+
+  "RECEITAS FINANCEIRAS": "Receitas Financeiras",
+  "DESPESAS FINANCEIRAS": "Despesas Financeiras",
+  "IMPOSTOS E TAXAS": "Outras Despesas Operacionais",
+
   "LAIR": "Resultado Antes Tributação/Participações",
   "Lucro Antes do IR": "Resultado Antes Tributação/Participações",
   "Resultado Antes dos Tributos": "Resultado Antes Tributação/Participações",
+
   "IR e CSLL": "Provisão para IR e Contribuição Social",
   "Imposto de Renda": "Provisão para IR e Contribuição Social",
   "IRPJ e CSLL": "Provisão para IR e Contribuição Social",
+
   "Lucro Líquido": "Lucro ou Prejuízo do Período",
   "Prejuízo do Período": "Lucro ou Prejuízo do Período",
   "Resultado Líquido": "Lucro ou Prejuízo do Período",
+  "RESULTADO LIQUIDO DO EXERCICIO": "Lucro ou Prejuízo do Período",
   "Lucro/Prejuízo": "Lucro ou Prejuízo do Período",
   "Lucro do Exercício": "Lucro ou Prejuízo do Período",
   "Resultado do Exercício": "Lucro ou Prejuízo do Período",
