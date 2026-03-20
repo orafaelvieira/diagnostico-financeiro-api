@@ -93,13 +93,27 @@ function computeIndicator(
   const ativoOperacional = bpByClass(bp, "AO", periodo);
   const passivoOperacional = Math.abs(bpByClass(bp, "PO", periodo));
 
-  // DRE values
-  const receitaLiquida = dreVal(dre, "Receita Líquida", periodo);
-  const resultadoBruto = dreVal(dre, "Resultado Bruto", periodo);
-  const resultadoOperacional = dreVal(dre, "Resultado Operacional", periodo);
+  // DRE raw values
+  const recBruta = dreVal(dre, "Receita Bruta de Vendas e/ou Serviços", periodo);
+  const deducoes = dreVal(dre, "Deduções da Receita Bruta", periodo);
+  const custoOp = dreVal(dre, "Custo Operacional", periodo);
+  const despGerais = dreVal(dre, "Despesas Gerais e Administrativas", periodo);
+  const despVendas = dreVal(dre, "Despesas Com Vendas", periodo);
+  const perdasNaoRecup = dreVal(dre, "Perdas pela Não Recuperabilidade de Ativos", periodo);
+  const outrasRecOp = dreVal(dre, "Outras Receitas Operacionais", periodo);
+  const outrasDespOp = dreVal(dre, "Outras Despesas Operacionais", periodo);
   const despesasFinanceiras = dreVal(dre, "Despesas Financeiras", periodo);
-  const custoOperacional = Math.abs(dreVal(dre, "Custo Operacional", periodo));
+  const receitasFinanceiras = dreVal(dre, "Receitas Financeiras", periodo);
+  const resNaoOp = dreVal(dre, "Resultado Não Operacional", periodo);
+  const provisaoIR = dreVal(dre, "Provisão para IR e Contribuição Social", periodo);
   const lucroPrejuizo = dreVal(dre, "Lucro ou Prejuízo do Período", periodo);
+
+  // DRE computed subtotals (use extracted value if available, otherwise compute)
+  const receitaLiquida = dreVal(dre, "Receita Líquida", periodo) || (recBruta + deducoes);
+  const resultadoBruto = dreVal(dre, "Resultado Bruto", periodo) || (receitaLiquida + custoOp);
+  const resultadoOperacional = dreVal(dre, "Resultado Operacional", periodo) ||
+    (resultadoBruto + despGerais + despVendas + perdasNaoRecup + outrasRecOp + outrasDespOp);
+  const custoOperacional = Math.abs(custoOp);
 
   // Computed intermediate values
   const capitalTerceiros = empFinCP + passPartRelCP + empFinLP + passPartRelLP;
