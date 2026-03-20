@@ -358,7 +358,6 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "Despesas Administrativas": "Despesas Gerais e Administrativas",
   "Despesas Gerais": "Despesas Gerais e Administrativas",
   "DESPESAS GERAIS": "Despesas Gerais e Administrativas",
-  "DESPESAS OPERACIONAIS": "Despesas Gerais e Administrativas",
   "DESPESAS C/ PESSOAL": "Despesas Gerais e Administrativas",
 
   "Despesas com Vendas": "Despesas Com Vendas",

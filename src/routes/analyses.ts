@@ -124,20 +124,24 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     let structuredBP: BPLineItem[] = [];
     let structuredDRE: DRELineItem[] = [];
 
-    // Auto-detect document type from tipo field, filename, or content
+    // Auto-detect document type — content-first, tipo as fallback
     function detectDocType(doc: ParsedDocument): "BP" | "DRE" | "BOTH" | "UNKNOWN" {
-      const tipoNorm = doc.tipo.toLowerCase();
-      if (tipoNorm.includes("balan") || tipoNorm.includes("balancete")) return "BP";
-      if (tipoNorm.includes("dre") || tipoNorm.includes("resultado") || tipoNorm.includes("demonstra")) return "DRE";
-
-      // Auto-detect from content
+      // 1. ALWAYS check content first (more reliable than user-provided tipo)
       const raw = doc.raw.toLowerCase();
       const hasBP = raw.includes("ativo circulante") || raw.includes("passivo circulante") || raw.includes("a t i v o");
-      const hasDRE = raw.includes("receita bruta") || raw.includes("resultado liquido") || raw.includes("custo operacional") || raw.includes("custo produtos vendidos");
+      const hasDRE = raw.includes("receita bruta") || raw.includes("resultado liquido") ||
+                     raw.includes("custo operacional") || raw.includes("custo produtos vendidos") ||
+                     raw.includes("demonstrativo de resultado") || raw.includes("demonstração do resultado");
 
       if (hasBP && hasDRE) return "BOTH";
       if (hasBP) return "BP";
       if (hasDRE) return "DRE";
+
+      // 2. Fallback: user-provided tipo field
+      const tipoNorm = doc.tipo.toLowerCase();
+      if (tipoNorm.includes("balan") || tipoNorm.includes("balancete")) return "BP";
+      if (tipoNorm.includes("dre") || tipoNorm.includes("resultado") || tipoNorm.includes("demonstra")) return "DRE";
+
       return "UNKNOWN";
     }
 

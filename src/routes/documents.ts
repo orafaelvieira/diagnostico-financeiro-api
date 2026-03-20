@@ -110,6 +110,27 @@ router.put("/:id/dados-extraidos", async (req: AuthRequest, res: Response): Prom
   res.json(updated);
 });
 
+// Update document type
+router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const { tipo } = req.body;
+  if (!tipo || !["DRE", "Balanço Patrimonial", "Balancete", "Outro"].includes(tipo)) {
+    res.status(400).json({ error: "Tipo inválido" });
+    return;
+  }
+
+  const doc = await prisma.document.findFirst({
+    where: { id, company: { userId: req.userId! } },
+  });
+  if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+
+  const updated = await prisma.document.update({
+    where: { id },
+    data: { tipo },
+  });
+  res.json(updated);
+});
+
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const doc = await prisma.document.findFirst({

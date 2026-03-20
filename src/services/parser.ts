@@ -113,6 +113,11 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
     }
   }
 
+  // Fall back to block correlation (multi-column PDFs without account codes, e.g. DRE)
+  if (linhas.length === 0) {
+    linhas = extractBlockCorrelation(text, periodos);
+  }
+
   // Gera raw text — sempre inclui o texto original para o Claude
   const raw = `${tipo}\n${text.slice(0, 8000)}`;
 
@@ -456,6 +461,74 @@ function extractStructuredLines(text: string): ExtractedRow[] {
     if (isNaN(num)) continue;
 
     result.push({ conta, valores: { "_val": num } });
+  }
+
+  return result;
+}
+
+/**
+ * Extract data from multi-column PDFs where names and values are in separate
+ * text blocks but WITHOUT account codes (e.g., DRE documents).
+ * Falls back to correlating pure-name lines with pure-value lines by document order.
+ */
+function extractBlockCorrelation(text: string, periodos: string[]): ExtractedRow[] {
+  const lines = text.split("\n");
+  if (periodos.length < 1) return [];
+
+  const brNumPattern = /\(?-?[\d.]+,\d{2}\)?/g;
+  const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS|ROBERTO|MARCO|Diretor|Contador|INSCR|LACTOBOM|DEMONSTRATIVO|DEMONSTRAÇÃO|BALANCO|BALANÇO|Conta\b|ContaSaldo|CNPJ|Toledo|Assinado|72\.\d|Dados:|STENZEL|BOMBARDELLI)/i;
+
+  // Also skip lines that look like CNPJ, CPF, CRC, or dates
+  const skipExtra = /^\d{2}\.\d{3}[\.\-\/]|^CRC\b|^\d{2}\/\d{2}\/\d{4}/i;
+
+  const nameLines: string[] = [];
+  const valueBlocks: number[][] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length < 3) continue;
+    if (skipPatterns.test(trimmed)) continue;
+    if (skipExtra.test(trimmed)) continue;
+
+    // Check if line has BR numbers
+    const numMatches = [...trimmed.matchAll(brNumPattern)];
+    const hasLetters = /[a-zA-ZÀ-ú]/.test(trimmed);
+
+    if (numMatches.length >= 1 && !hasLetters) {
+      // Pure value line — no letters, just numbers
+      const values = numMatches.map(m => parseBRNumber(m[0])).filter((n): n is number => n !== null);
+      if (values.length > 0) valueBlocks.push(values);
+    } else if (hasLetters && numMatches.length === 0) {
+      // Pure name line — letters but no BR numbers
+      let name = trimmed;
+      // Strip leading account code if present (e.g., "3001 RECEITA..." → "RECEITA...")
+      name = name.replace(/^\s*\d+\s+/, "").trim();
+      if (name.length >= 3 && !/^[\d.,\-()\/]+$/.test(name)) {
+        nameLines.push(name);
+      }
+    }
+    // Mixed lines (name+value on same line) are handled by extractInlinePDF — skip here
+  }
+
+  // Need enough lines to correlate and counts must roughly match
+  if (nameLines.length < 3 || valueBlocks.length < 3) return [];
+  if (Math.abs(nameLines.length - valueBlocks.length) > Math.max(5, Math.floor(nameLines.length * 0.2))) return [];
+
+  const result: ExtractedRow[] = [];
+  const count = Math.min(nameLines.length, valueBlocks.length);
+
+  for (let i = 0; i < count; i++) {
+    const conta = nameLines[i];
+    const vals = valueBlocks[i];
+    const valores: Record<string, number> = {};
+
+    for (let j = 0; j < Math.min(vals.length, periodos.length); j++) {
+      valores[periodos[j]] = vals[j];
+    }
+
+    if (Object.keys(valores).length > 0) {
+      result.push({ conta, valores });
+    }
   }
 
   return result;
