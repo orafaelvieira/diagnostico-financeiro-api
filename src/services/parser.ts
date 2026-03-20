@@ -260,6 +260,21 @@ function extractMultiColumnPDF(text: string, periodos: string[]): ExtractedRow[]
         name: codeMatch[3].trim(),
         indent,
       });
+    } else {
+      // Also match "NNNN TEXT" format without hierarchical code (e.g., "1000 A T I V O", "2000 P A S S I V O")
+      const simpleCodeMatch = trimmed.match(/^\s*(\d{3,5})\s+([A-ZÀ-Ú][A-ZÀ-Ú\s]+)$/);
+      if (simpleCodeMatch) {
+        hasCodeLines = true;
+        const rawId = parseInt(simpleCodeMatch[1]);
+        // Synthesize hierarchical code from raw ID: 1000 → "1", 2000 → "2"
+        const syntheticCode = String(Math.floor(rawId / 1000));
+        const indent = line.length - line.trimStart().length;
+        nameLines.push({
+          code: syntheticCode,
+          name: simpleCodeMatch[2].trim(),
+          indent,
+        });
+      }
     }
   }
 

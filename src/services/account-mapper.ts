@@ -116,6 +116,13 @@ export function mapExtractedToBP(linhas: ExtractedRow[]): BPLineItem[] {
   return [...result, ...unmatched];
 }
 
+// DRE totalizer names that should NOT be mapped via fuzzy matching.
+// These are parent-level totals whose sub-items are individually mapped.
+// They would otherwise fuzzy-match to specific sub-categories and pollute them.
+const DRE_SKIP_TOTALS = new Set([
+  "despesas operacionais",  // total of all operating expenses — sub-items mapped individually
+]);
+
 export function mapExtractedToDRE(linhas: ExtractedRow[]): DRELineItem[] {
   const templateNames = DRE_TEMPLATE.map(t => t.conta);
   const result: DRELineItem[] = DRE_TEMPLATE.map(t => ({
@@ -128,6 +135,12 @@ export function mapExtractedToDRE(linhas: ExtractedRow[]): DRELineItem[] {
   const unmatched: DRELineItem[] = [];
 
   for (const linha of linhas) {
+    // Skip known totalizer lines that would pollute sub-item mapping via fuzzy match
+    const normConta = linha.conta.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    if (DRE_SKIP_TOTALS.has(normConta)) {
+      unmatched.push({ conta: linha.conta, valores: { ...linha.valores }, subtotal: false, editado: false });
+      continue;
+    }
     const match = findBestMatch(linha.conta, templateNames);
     if (match) {
       const idx = result.findIndex(r => r.conta === match);
