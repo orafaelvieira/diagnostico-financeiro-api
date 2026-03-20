@@ -290,7 +290,7 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
 
   // Outros (Passivo)
   "OUTRAS OBRIGAÇÕES": "Outros",
-  "CONTAS A PAGAR": "Outros",
+  "CONTAS A PAGAR": "Fornecedores",
   "ADIANTAMENTO RECEBIDO": "Outros",
 
   // Provisões

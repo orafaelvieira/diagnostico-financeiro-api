@@ -124,23 +124,30 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     let structuredBP: BPLineItem[] = [];
     let structuredDRE: DRELineItem[] = [];
 
-    for (const doc of parsedDocs) {
+    // Auto-detect document type from tipo field, filename, or content
+    function detectDocType(doc: ParsedDocument): "BP" | "DRE" | "BOTH" | "UNKNOWN" {
       const tipoNorm = doc.tipo.toLowerCase();
-      if (tipoNorm.includes("balan") || tipoNorm.includes("balancete")) {
-        structuredBP = mapExtractedToBP(doc.linhas);
-      }
-      if (tipoNorm.includes("dre") || tipoNorm.includes("resultado") || tipoNorm.includes("demonstra")) {
-        structuredDRE = mapExtractedToDRE(doc.linhas);
-      }
+      if (tipoNorm.includes("balan") || tipoNorm.includes("balancete")) return "BP";
+      if (tipoNorm.includes("dre") || tipoNorm.includes("resultado") || tipoNorm.includes("demonstra")) return "DRE";
+
+      // Auto-detect from content
+      const raw = doc.raw.toLowerCase();
+      const hasBP = raw.includes("ativo circulante") || raw.includes("passivo circulante") || raw.includes("a t i v o");
+      const hasDRE = raw.includes("receita bruta") || raw.includes("resultado liquido") || raw.includes("custo operacional") || raw.includes("custo produtos vendidos");
+
+      if (hasBP && hasDRE) return "BOTH";
+      if (hasBP) return "BP";
+      if (hasDRE) return "DRE";
+      return "UNKNOWN";
     }
 
-    // If we got a Balancete, try to extract both BP and DRE from it
-    if (structuredBP.length === 0 && structuredDRE.length === 0) {
-      for (const doc of parsedDocs) {
-        if (doc.linhas.length > 0) {
-          structuredBP = mapExtractedToBP(doc.linhas);
-          structuredDRE = mapExtractedToDRE(doc.linhas);
-        }
+    for (const doc of parsedDocs) {
+      const docType = detectDocType(doc);
+      if ((docType === "BP" || docType === "BOTH") && structuredBP.length === 0) {
+        structuredBP = mapExtractedToBP(doc.linhas);
+      }
+      if ((docType === "DRE" || docType === "BOTH") && structuredDRE.length === 0) {
+        structuredDRE = mapExtractedToDRE(doc.linhas);
       }
     }
 
@@ -156,7 +163,10 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
     await prisma.analysis.update({
       where: { id: analysis.id },
-      data: { dadosEstruturados: dadosEstruturados as any },
+      data: {
+        dadosEstruturados: dadosEstruturados as any,
+        periodo: allPeriodos.join(" a "),
+      },
     });
 
     // 3. Atualiza status para "Gerando diagnóstico"

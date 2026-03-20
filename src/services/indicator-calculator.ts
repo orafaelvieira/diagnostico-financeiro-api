@@ -67,7 +67,7 @@ function computeIndicator(
   periodo: string,
   computed: Record<string, number | null>
 ): number | string | null {
-  // BP values
+  // BP values — Ativo (always positive)
   const ativoTotal = bpVal(bp, "Ativo Total", periodo);
   const ativoCirculante = bpVal(bp, "Ativo Circulante", periodo);
   const caixa = bpVal(bp, "Caixa e Equivalentes de Caixa", periodo);
@@ -77,19 +77,21 @@ function computeIndicator(
   const realizavelLP = bpVal(bp, "Ativo Realizável a Longo Prazo", periodo);
   const aplicacoesVJ = bpVal(bp, "Aplicações Financeiras Avaliadas a Valor Justo - ALP", periodo);
   const aplicacoesCusto = bpVal(bp, "Aplicações Financeiras Avaliadas ao Custo Amortizado - ALP", periodo);
-  const passivoTotal = bpVal(bp, "Passivo Total", periodo);
-  const passivoCirculante = bpVal(bp, "Passivo Circulante", periodo);
-  const passivoNaoCirculante = bpVal(bp, "Passivo Não Circulante", periodo);
-  const fornecedores = bpVal(bp, "Fornecedores", periodo);
-  const empFinCP = bpVal(bp, "Empréstimos e Financiamentos", periodo);
-  const passPartRelCP = bpVal(bp, "Passivos com Partes Relacionadas", periodo);
-  const empFinLP = bpVal(bp, "Empréstimos e Financiamentos - PLP", periodo);
-  const passPartRelLP = bpVal(bp, "Passivos com Partes Relacionadas - PLP", periodo);
-  const patrimonioLiquido = bpVal(bp, "Patrimônio Líquido", periodo);
 
-  // Aggregated by classification
+  // BP values — Passivo e PL: normalize signs (some accounting systems store these as negative)
+  const passivoTotal = Math.abs(bpVal(bp, "Passivo Total", periodo));
+  const passivoCirculante = Math.abs(bpVal(bp, "Passivo Circulante", periodo));
+  const passivoNaoCirculante = Math.abs(bpVal(bp, "Passivo Não Circulante", periodo));
+  const fornecedores = Math.abs(bpVal(bp, "Fornecedores", periodo));
+  const empFinCP = Math.abs(bpVal(bp, "Empréstimos e Financiamentos", periodo));
+  const passPartRelCP = Math.abs(bpVal(bp, "Passivos com Partes Relacionadas", periodo));
+  const empFinLP = Math.abs(bpVal(bp, "Empréstimos e Financiamentos - PLP", periodo));
+  const passPartRelLP = Math.abs(bpVal(bp, "Passivos com Partes Relacionadas - PLP", periodo));
+  const patrimonioLiquido = Math.abs(bpVal(bp, "Patrimônio Líquido", periodo));
+
+  // Aggregated by classification (abs for Passivo side)
   const ativoOperacional = bpByClass(bp, "AO", periodo);
-  const passivoOperacional = bpByClass(bp, "PO", periodo);
+  const passivoOperacional = Math.abs(bpByClass(bp, "PO", periodo));
 
   // DRE values
   const receitaLiquida = dreVal(dre, "Receita Líquida", periodo);

@@ -120,34 +120,69 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
 }
 
 /**
- * Detect periods from PDF text. Returns sorted period strings.
- * Looks for patterns like "31/12/2023", "2023", "2024", etc.
+ * Detect financial periods from PDF text. Returns sorted period strings.
+ * Prioritizes authoritative patterns ("Encerrado em", "Saldo período")
+ * and excludes print/generation dates ("Data:", "Hora:").
  */
 function detectPeriodsFromPDF(text: string): string[] {
   const periods = new Set<string>();
 
-  // Pattern: "31/12/2023" - Brazilian date format
-  const dateMatches = text.matchAll(/(\d{2}\/\d{2}\/(20\d{2}))/g);
-  for (const m of dateMatches) {
-    periods.add(m[1]); // Full date like "31/12/2023"
+  // 1. Priority: "Encerrado em DD/MM/YYYY" — authoritative period marker
+  const encerradoMatches = text.matchAll(/[Ee]ncerrad[oa]\s+em[:\s]+(\d{2}\/\d{2}\/\d{4})/g);
+  for (const m of encerradoMatches) {
+    periods.add(m[1]);
   }
 
-  // If we found dates, return them sorted
+  // 2. "Saldo período DD/MM/YYYY" — column header pattern
+  const saldoMatches = text.matchAll(/[Ss]aldo\s+per[ií]odo\s*[\n\s]*(\d{2}\/\d{2}\/\d{4})/g);
+  for (const m of saldoMatches) {
+    periods.add(m[1]);
+  }
+
   if (periods.size >= 1) {
-    return Array.from(periods).sort((a, b) => {
-      const ya = parseInt(a.slice(-4));
-      const yb = parseInt(b.slice(-4));
-      return ya - yb;
-    });
+    return sortPeriods(periods);
   }
 
-  // Fallback: "Encerrado em DD/MM/YYYY"
-  const encerradoMatch = text.match(/[Ee]ncerrad[oa]\s+em[:\s]+(\d{2}\/\d{2}\/\d{4})/);
-  if (encerradoMatch) {
-    return [encerradoMatch[1]];
+  // 3. Collect all DD/MM/YYYY dates, but exclude print/generation dates
+  const allDates = text.matchAll(/(\d{2}\/\d{2}\/(20\d{2}))/g);
+  const candidates: string[] = [];
+  for (const m of allDates) {
+    candidates.push(m[1]);
   }
 
-  // Fallback: standalone years
+  // Filter out dates preceded by "Data:", "Gerado", "Impresso", "Hora"
+  const printDatePattern = /(?:Data|Gerado|Impresso|Hora)[:\s]*\d{2}\/\d{2}\/\d{4}/gi;
+  const printDates = new Set<string>();
+  const printMatches = text.matchAll(printDatePattern);
+  for (const m of printMatches) {
+    const dateInMatch = m[0].match(/(\d{2}\/\d{2}\/\d{4})/);
+    if (dateInMatch) printDates.add(dateInMatch[1]);
+  }
+
+  for (const d of candidates) {
+    if (!printDates.has(d)) {
+      periods.add(d);
+    }
+  }
+
+  // If still multiple dates, prefer fiscal year-end dates (DD/12/YYYY)
+  if (periods.size > 1) {
+    const yearEnd = new Set<string>();
+    for (const p of periods) {
+      if (p.startsWith("31/12/") || p.startsWith("30/12/")) {
+        yearEnd.add(p);
+      }
+    }
+    if (yearEnd.size >= 1) {
+      return sortPeriods(yearEnd);
+    }
+  }
+
+  if (periods.size >= 1) {
+    return sortPeriods(periods);
+  }
+
+  // 4. Fallback: standalone years
   const yearMatches = text.matchAll(/\b(20[2-3]\d)\b/g);
   const years = new Set<string>();
   for (const m of yearMatches) years.add(m[1]);
@@ -156,6 +191,15 @@ function detectPeriodsFromPDF(text: string): string[] {
   }
 
   return [];
+}
+
+function sortPeriods(periods: Set<string>): string[] {
+  return Array.from(periods).sort((a, b) => {
+    const ya = parseInt(a.slice(-4));
+    const yb = parseInt(b.slice(-4));
+    if (ya !== yb) return ya - yb;
+    return a.localeCompare(b);
+  });
 }
 
 /**
