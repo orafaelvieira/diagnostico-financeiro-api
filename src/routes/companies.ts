@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { deleteFile } from "../services/storage";
 
 const router = Router();
 router.use(requireAuth);
@@ -61,8 +62,25 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   const existing = await prisma.company.findFirst({ where: { id, userId: req.userId! } });
   if (!existing) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
-  await prisma.company.delete({ where: { id } });
-  res.status(204).send();
+  try {
+    // Delete associated storage files before cascading DB delete
+    const docs = await prisma.document.findMany({
+      where: { company: { id } },
+      select: { storagePath: true },
+    });
+
+    for (const doc of docs) {
+      if (doc.storagePath) {
+        try { await deleteFile(doc.storagePath); } catch { /* ignore storage errors */ }
+      }
+    }
+
+    await prisma.company.delete({ where: { id } });
+    res.status(204).send();
+  } catch (err: any) {
+    console.error("Error deleting company:", err);
+    res.status(500).json({ error: "Erro ao excluir empresa. Tente novamente." });
+  }
 });
 
 export default router;
