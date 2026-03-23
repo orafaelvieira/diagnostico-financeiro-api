@@ -10,7 +10,14 @@ import documentsRouter from "./routes/documents";
 
 const app = express();
 
-app.use(cors({ origin: env.frontendUrl, credentials: true }));
+app.use(cors({
+  origin: [
+    env.frontendUrl,
+    "https://walrus-app-bizfv.ondigitalocean.app",
+    "http://localhost:5173",
+  ],
+  credentials: true,
+}));
 app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
