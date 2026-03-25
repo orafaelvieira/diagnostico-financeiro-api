@@ -129,13 +129,15 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       // 1. ALWAYS check content first (more reliable than user-provided tipo)
       const raw = doc.raw.toLowerCase();
       const hasBP = raw.includes("ativo circulante") || raw.includes("passivo circulante") || raw.includes("a t i v o");
+      // DRE keywords — must be specific enough to NOT match BP account names
+      // e.g., "prejuizo" alone matches "LUCROS OU PREJUIZOS ACUMULADOS" in BP!
       const hasDRE = raw.includes("receita bruta") || raw.includes("resultado liquido") ||
                      raw.includes("custo operacional") || raw.includes("custo produtos vendidos") ||
                      raw.includes("demonstrativo de resultado") || raw.includes("demonstração do resultado") ||
                      raw.includes("receita de vendas") || raw.includes("deducoes da receita") ||
-                     raw.includes("deduções da receita") || raw.includes("despesas operacionais") ||
-                     raw.includes("resultado do exerc") || raw.includes("lucro bruto") ||
-                     raw.includes("prejuizo") || raw.includes("prejuízo");
+                     raw.includes("deduções da receita") || raw.includes("resultado do exerc") ||
+                     raw.includes("receita operacional líquida") || raw.includes("despesas com vendas") ||
+                     raw.includes("margem bruta") || raw.includes("custo das mercadorias");
 
       if (hasBP && hasDRE) return "BOTH";
       if (hasBP) return "BP";
