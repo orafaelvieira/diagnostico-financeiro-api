@@ -119,21 +119,24 @@ export function mapExtractedToBP(linhas: ExtractedRow[]): BPLineItem[] {
   );
 
   for (const linha of linhas) {
-    // If this line has a hierarchical code and has children in the input,
-    // it's a parent/totalizer account — preserve it separately, don't fuzzy-match
-    // to a child template account. Example: "Disponível" (code 1.01.01) is parent
-    // of "Caixa" (code 1.01.01.01) and should NOT be aliased to "Caixa e Equivalentes".
-    if (linha.code && isParentAccount(linha.code, codeSet)) {
+    // Skip INTERMEDIATE parent accounts (depth >= 3, e.g., "Disponível" code 1.01.01)
+    // that have children in the input. These are sub-group totals that should NOT be
+    // fuzzy-matched to child template accounts.
+    // Top-level accounts (depth 1-2, e.g., "Ativo Total" code "1", "Ativo Circulante" code "1.01")
+    // are always matched normally — they correspond to template entries.
+    if (linha.code) {
       const depth = linha.code.split(".").length;
-      const nivel = Math.max(depth - 1, 0);
-      unmatched.push({
-        classificacao: classificacaoFromCode(linha.code),
-        conta: linha.conta,
-        valores: { ...linha.valores },
-        nivel,
-        editado: false,
-      });
-      continue;
+      if (depth >= 3 && isParentAccount(linha.code, codeSet)) {
+        const nivel = Math.max(depth - 1, 0);
+        unmatched.push({
+          classificacao: classificacaoFromCode(linha.code),
+          conta: linha.conta,
+          valores: { ...linha.valores },
+          nivel,
+          editado: false,
+        });
+        continue;
+      }
     }
 
     const match = findBestMatch(linha.conta, templateNames);
