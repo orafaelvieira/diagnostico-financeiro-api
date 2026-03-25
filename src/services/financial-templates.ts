@@ -164,10 +164,9 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "Circulante": "Ativo Circulante",
 
   // Caixa e Equivalentes
-  "Disponibilidades": "Caixa e Equivalentes de Caixa",
-  "DISPONIBILIDADES": "Caixa e Equivalentes de Caixa",
-  "DISPONIVEL": "Caixa e Equivalentes de Caixa",
-  "Disponível": "Caixa e Equivalentes de Caixa",
+  // NOTE: "Disponível"/"Disponibilidades" are PARENT accounts (level 3) that contain
+  // "Caixa" as a child (level 4). They must NOT be aliased to "Caixa e Equivalentes"
+  // to avoid collapsing hierarchy levels. The mapper handles them via isParentAccount().
   "Caixa e Bancos": "Caixa e Equivalentes de Caixa",
   "Caixa": "Caixa e Equivalentes de Caixa",
   "CAIXA": "Caixa e Equivalentes de Caixa",

@@ -3,6 +3,8 @@ import * as XLSX from "xlsx";
 export interface ExtractedRow {
   conta: string;
   valores: Record<string, number>; // { "Jan/2025": 1000000, "Fev/2025": 950000, ... }
+  code?: string;    // Código hierárquico do plano de contas (ex: "1.01.01")
+  indent?: number;  // Nível de indentação no PDF original
 }
 
 export interface ParsedDocument {
@@ -352,7 +354,7 @@ function extractMultiColumnPDF(text: string, periodos: string[]): ExtractedRow[]
       }
 
       if (Object.keys(valores).length > 0) {
-        result.push({ conta: name.name, valores });
+        result.push({ conta: name.name, valores, code: name.code, indent: name.indent });
       }
     }
   } else {

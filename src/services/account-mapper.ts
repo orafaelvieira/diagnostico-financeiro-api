@@ -74,6 +74,32 @@ function findBestMatch(conta: string, candidates: string[]): string | null {
   return null;
 }
 
+/**
+ * Determine if a hierarchical code is a parent (has children in the input).
+ * E.g., "1.01.01" is a parent if "1.01.01.01" exists in the set.
+ */
+function isParentAccount(code: string, allCodes: Set<string>): boolean {
+  const prefix = code + ".";
+  for (const other of allCodes) {
+    if (other.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/**
+ * Derive BP classificacao from hierarchical account code.
+ */
+function classificacaoFromCode(code: string): string {
+  if (code.startsWith("1.01")) return "AC";
+  if (code.startsWith("1.02")) return "ANC";
+  if (code.startsWith("1")) return "AT";
+  if (code.startsWith("2.01")) return "PC";
+  if (code.startsWith("2.02")) return "PNC";
+  if (code.startsWith("2.03")) return "PL";
+  if (code.startsWith("2")) return "PT";
+  return "0";
+}
+
 export function mapExtractedToBP(linhas: ExtractedRow[]): BPLineItem[] {
   const templateNames = BP_TEMPLATE.map(t => t.conta);
   const result: BPLineItem[] = BP_TEMPLATE.map(t => ({
@@ -87,7 +113,29 @@ export function mapExtractedToBP(linhas: ExtractedRow[]): BPLineItem[] {
   const unmatched: BPLineItem[] = [];
   const matched = new Set<string>();
 
+  // Build code index to detect parent accounts with children
+  const codeSet = new Set(
+    linhas.filter(l => l.code).map(l => l.code!)
+  );
+
   for (const linha of linhas) {
+    // If this line has a hierarchical code and has children in the input,
+    // it's a parent/totalizer account — preserve it separately, don't fuzzy-match
+    // to a child template account. Example: "Disponível" (code 1.01.01) is parent
+    // of "Caixa" (code 1.01.01.01) and should NOT be aliased to "Caixa e Equivalentes".
+    if (linha.code && isParentAccount(linha.code, codeSet)) {
+      const depth = linha.code.split(".").length;
+      const nivel = Math.max(depth - 1, 0);
+      unmatched.push({
+        classificacao: classificacaoFromCode(linha.code),
+        conta: linha.conta,
+        valores: { ...linha.valores },
+        nivel,
+        editado: false,
+      });
+      continue;
+    }
+
     const match = findBestMatch(linha.conta, templateNames);
     if (match) {
       const idx = result.findIndex(r => r.conta === match);
@@ -101,12 +149,13 @@ export function mapExtractedToBP(linhas: ExtractedRow[]): BPLineItem[] {
         }
       }
     } else {
-      // Unmatched — include for manual review
+      // Unmatched — include for manual review, with proper nivel from code depth
+      const depth = linha.code ? linha.code.split(".").length : 4;
       unmatched.push({
-        classificacao: "0",
+        classificacao: linha.code ? classificacaoFromCode(linha.code) : "0",
         conta: linha.conta,
         valores: { ...linha.valores },
-        nivel: 3,
+        nivel: Math.max(depth - 1, 2),
         editado: false,
       });
     }

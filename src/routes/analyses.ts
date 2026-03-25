@@ -131,7 +131,11 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       const hasBP = raw.includes("ativo circulante") || raw.includes("passivo circulante") || raw.includes("a t i v o");
       const hasDRE = raw.includes("receita bruta") || raw.includes("resultado liquido") ||
                      raw.includes("custo operacional") || raw.includes("custo produtos vendidos") ||
-                     raw.includes("demonstrativo de resultado") || raw.includes("demonstração do resultado");
+                     raw.includes("demonstrativo de resultado") || raw.includes("demonstração do resultado") ||
+                     raw.includes("receita de vendas") || raw.includes("deducoes da receita") ||
+                     raw.includes("deduções da receita") || raw.includes("despesas operacionais") ||
+                     raw.includes("resultado do exerc") || raw.includes("lucro bruto") ||
+                     raw.includes("prejuizo") || raw.includes("prejuízo");
 
       if (hasBP && hasDRE) return "BOTH";
       if (hasBP) return "BP";
@@ -147,11 +151,25 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
     for (const doc of parsedDocs) {
       const docType = detectDocType(doc);
+      console.log(`[process] Doc "${doc.tipo}" detected as ${docType}, linhas: ${doc.linhas.length}, raw length: ${doc.raw.length}`);
+
       if ((docType === "BP" || docType === "BOTH") && structuredBP.length === 0) {
         structuredBP = mapExtractedToBP(doc.linhas);
       }
       if ((docType === "DRE" || docType === "BOTH") && structuredDRE.length === 0) {
         structuredDRE = mapExtractedToDRE(doc.linhas);
+      }
+
+      // Fallback: if docType is UNKNOWN but user said it's DRE/BP, try anyway
+      if (docType === "UNKNOWN" && doc.linhas.length > 0) {
+        const tipoNorm = doc.tipo.toLowerCase();
+        if ((tipoNorm.includes("dre") || tipoNorm.includes("resultado")) && structuredDRE.length === 0) {
+          console.log(`[process] Fallback: treating UNKNOWN doc as DRE based on tipo="${doc.tipo}"`);
+          structuredDRE = mapExtractedToDRE(doc.linhas);
+        } else if ((tipoNorm.includes("balan") || tipoNorm.includes("balancete")) && structuredBP.length === 0) {
+          console.log(`[process] Fallback: treating UNKNOWN doc as BP based on tipo="${doc.tipo}"`);
+          structuredBP = mapExtractedToBP(doc.linhas);
+        }
       }
     }
 
