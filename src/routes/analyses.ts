@@ -5,7 +5,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { generateAnalysis } from "../services/claude";
-import { mapExtractedToBP, mapExtractedToDRE, detectPeriodos } from "../services/account-mapper";
+import { mapExtractedToBP, mapExtractedToDRE, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
 import type { DadosEstruturados, BPLineItem, DRELineItem } from "../types/financial";
 
@@ -119,7 +119,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       })
     );
 
-    // 2.5 Compute structured financial data (BP, DRE, Indicadores)
+    // 2.5 Normalize periods across documents (e.g., "31/12/2023" + "2023" → "31/12/2023")
+    normalizePeriods(parsedDocs);
     const allPeriodos = detectPeriodos(parsedDocs);
     let structuredBP: BPLineItem[] = [];
     let structuredDRE: DRELineItem[] = [];

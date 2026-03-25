@@ -216,6 +216,71 @@ export function mapExtractedToDRE(linhas: ExtractedRow[]): DRELineItem[] {
   return [...result, ...unmatched];
 }
 
+/**
+ * Extract year from a period string.
+ * "31/12/2023" → "2023", "2023" → "2023", "Jan/2024" → "2024"
+ */
+function extractYear(period: string): string | null {
+  const match = period.match(/(20[1-3]\d)/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Normalize periods across all parsed documents so that different representations
+ * of the same year (e.g., "31/12/2023" and "2023") are unified into a single canonical form.
+ *
+ * Strategy: Group periods by year. For each year, prefer the most specific format
+ * (DD/MM/YYYY > YYYY). Remap all valores keys in all linhas accordingly.
+ */
+export function normalizePeriods(parsedDocs: Array<{ periodos: string[]; linhas: ExtractedRow[] }>): void {
+  // 1. Collect all periods and group by year
+  const byYear = new Map<string, string[]>();
+  for (const doc of parsedDocs) {
+    for (const p of doc.periodos) {
+      const year = extractYear(p);
+      if (year) {
+        if (!byYear.has(year)) byYear.set(year, []);
+        const arr = byYear.get(year)!;
+        if (!arr.includes(p)) arr.push(p);
+      }
+    }
+  }
+
+  // 2. Build normalization map: variant → canonical
+  // Prefer DD/MM/YYYY format, then the longest representation
+  const normMap = new Map<string, string>();
+  for (const [_year, variants] of byYear) {
+    if (variants.length <= 1) continue;
+    // Pick canonical: prefer full date (DD/MM/YYYY)
+    const fullDate = variants.find(v => /^\d{2}\/\d{2}\/\d{4}$/.test(v));
+    const canonical = fullDate || variants.sort((a, b) => b.length - a.length)[0];
+    for (const v of variants) {
+      if (v !== canonical) normMap.set(v, canonical);
+    }
+  }
+
+  if (normMap.size === 0) return; // nothing to normalize
+
+  // 3. Remap periodos arrays and valores keys in all documents
+  for (const doc of parsedDocs) {
+    doc.periodos = doc.periodos.map(p => normMap.get(p) || p);
+    // Deduplicate after remapping
+    doc.periodos = [...new Set(doc.periodos)];
+
+    for (const linha of doc.linhas) {
+      const newValores: Record<string, number> = {};
+      for (const [key, val] of Object.entries(linha.valores)) {
+        const normKey = normMap.get(key) || key;
+        // If key was remapped and target already exists, keep the first (don't overwrite)
+        if (newValores[normKey] === undefined) {
+          newValores[normKey] = val;
+        }
+      }
+      linha.valores = newValores;
+    }
+  }
+}
+
 /** Detect all unique periods across extracted documents */
 export function detectPeriodos(parsedDocs: Array<{ periodos: string[] }>): string[] {
   const set = new Set<string>();
