@@ -8,7 +8,7 @@ import { generateAnalysis } from "../services/claude";
 import { mapExtractedToBP, mapExtractedToDRE, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
-import type { DadosEstruturados, BPLineItem, DRELineItem } from "../types/financial";
+import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
 const router = Router();
 router.use(requireAuth);
@@ -139,6 +139,32 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const allPeriodos = detectPeriodos(parsedDocs);
     let structuredBP: BPLineItem[] = [];
     let structuredDRE: DRELineItem[] = [];
+    const unmatchedAccounts: UnmatchedAccount[] = [];
+
+    // Pre-fetch dictionary entries for this user (BP + DRE)
+    const dictEntries = await prisma.accountDictionary.findMany({
+      where: {
+        OR: [{ userId: null }, { userId: req.userId! }],
+      },
+      select: { nomeOriginal: true, contaDestino: true, userId: true, tipo: true },
+    });
+
+    // User entries override global entries with same nomeOriginal
+    type DictRow = typeof dictEntries[number];
+    const buildDictForType = (tipo: string) => {
+      const dictMap = new Map<string, string>();
+      // First add global entries
+      for (const e of dictEntries.filter((e: DictRow) => e.userId === null && e.tipo === tipo)) {
+        dictMap.set(e.nomeOriginal.toLowerCase(), e.contaDestino);
+      }
+      // Then override with user entries
+      for (const e of dictEntries.filter((e: DictRow) => e.userId !== null && e.tipo === tipo)) {
+        dictMap.set(e.nomeOriginal.toLowerCase(), e.contaDestino);
+      }
+      return Array.from(dictMap.entries()).map(([nomeOriginal, contaDestino]) => ({ nomeOriginal, contaDestino }));
+    };
+    const dictForBP = buildDictForType("BP");
+    const dictForDRE = buildDictForType("DRE");
 
     // Auto-detect document type — content-first, tipo as fallback
     function detectDocType(doc: ParsedDocument): "BP" | "DRE" | "BOTH" | "UNKNOWN" {
@@ -173,10 +199,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       console.log(`[process] Doc "${doc.tipo}" detected as ${docType}, linhas: ${doc.linhas.length}, raw length: ${doc.raw.length}`);
 
       if ((docType === "BP" || docType === "BOTH") && structuredBP.length === 0) {
-        structuredBP = mapExtractedToBP(doc.linhas);
+        const bpResult = mapExtractedToBP(doc.linhas, dictForBP);
+        structuredBP = bpResult.items;
+        unmatchedAccounts.push(...bpResult.unmatched);
       }
       if ((docType === "DRE" || docType === "BOTH") && structuredDRE.length === 0) {
-        structuredDRE = mapExtractedToDRE(doc.linhas);
+        const dreResult = mapExtractedToDRE(doc.linhas, dictForDRE);
+        structuredDRE = dreResult.items;
+        unmatchedAccounts.push(...dreResult.unmatched);
       }
 
       // Fallback: if docType is UNKNOWN but user said it's DRE/BP, try anyway
@@ -184,10 +214,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         const tipoNorm = doc.tipo.toLowerCase();
         if ((tipoNorm.includes("dre") || tipoNorm.includes("resultado")) && structuredDRE.length === 0) {
           console.log(`[process] Fallback: treating UNKNOWN doc as DRE based on tipo="${doc.tipo}"`);
-          structuredDRE = mapExtractedToDRE(doc.linhas);
+          const dreResult = mapExtractedToDRE(doc.linhas, dictForDRE);
+          structuredDRE = dreResult.items;
+          unmatchedAccounts.push(...dreResult.unmatched);
         } else if ((tipoNorm.includes("balan") || tipoNorm.includes("balancete")) && structuredBP.length === 0) {
           console.log(`[process] Fallback: treating UNKNOWN doc as BP based on tipo="${doc.tipo}"`);
-          structuredBP = mapExtractedToBP(doc.linhas);
+          const bpResult = mapExtractedToBP(doc.linhas, dictForBP);
+          structuredBP = bpResult.items;
+          unmatchedAccounts.push(...bpResult.unmatched);
         }
       }
     }
@@ -224,7 +258,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       dre: structuredDRE,
       indicadores,
       periodos: allPeriodos,
-      version: 1,
+      unmatchedAccounts,
+      version: 2,
     };
 
     // Calculate document-level confidence from validation

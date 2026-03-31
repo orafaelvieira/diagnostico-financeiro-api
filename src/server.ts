@@ -7,6 +7,7 @@ import authRouter from "./routes/auth";
 import companiesRouter from "./routes/companies";
 import analysesRouter from "./routes/analyses";
 import documentsRouter from "./routes/documents";
+import dictionaryRouter from "./routes/dictionary";
 
 const app = express();
 
@@ -26,6 +27,7 @@ app.use("/auth", authRouter);
 app.use("/companies", companiesRouter);
 app.use("/analyses", analysesRouter);
 app.use("/documents", documentsRouter);
+app.use("/dictionary", dictionaryRouter);
 
 app.listen(env.port, () => {
   console.log(`Server running on port ${env.port}`);

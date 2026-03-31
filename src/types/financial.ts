@@ -23,10 +23,16 @@ export interface Indicador {
   overrides: Record<string, number | null>;
 }
 
+export interface UnmatchedAccount {
+  conta: string;
+  valores: Record<string, number>;
+}
+
 export interface DadosEstruturados {
   bp: BPLineItem[];
   dre: DRELineItem[];
   indicadores: Indicador[];
   periodos: string[];
+  unmatchedAccounts?: UnmatchedAccount[];
   version: number;
 }

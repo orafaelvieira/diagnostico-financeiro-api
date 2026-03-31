@@ -15,10 +15,29 @@ model User {
   workspaceType String     @default("consultoria") @map("workspace_type")
   createdAt     DateTime   @default(now()) @map("created_at")
 
-  companies Company[]
-  analyses  Analysis[]
+  companies    Company[]
+  analyses     Analysis[]
+  dictionaries AccountDictionary[]
 
   @@map("users")
+}
+
+model AccountDictionary {
+  id            String   @id @default(uuid())
+  nomeOriginal  String   @map("nome_original")
+  contaDestino  String   @map("conta_destino")
+  grupoConta    String   @map("grupo_conta")
+  tipo          String   @default("BP")
+  userId        String?  @map("user_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([nomeOriginal, tipo, userId])
+  @@index([userId])
+  @@index([nomeOriginal])
+  @@map("account_dictionaries")
 }
 
 model Company {

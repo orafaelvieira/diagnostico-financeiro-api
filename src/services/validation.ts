@@ -94,7 +94,7 @@ export function validateFinancialData(
 
     // ===== 2. Composição do Ativo: AC + ANC = Ativo Total =====
     const ativoCirculante = bpVal(bp, "Ativo Circulante", periodo);
-    const ativoNaoCirculante = bpVal(bp, "Ativo Realizável a Longo Prazo", periodo);
+    const ativoNaoCirculante = bpVal(bp, "Ativo Não Circulante", periodo);
 
     if (ativoTotal !== 0 && (ativoCirculante !== 0 || ativoNaoCirculante !== 0)) {
       const somaAtivo = ativoCirculante + ativoNaoCirculante;

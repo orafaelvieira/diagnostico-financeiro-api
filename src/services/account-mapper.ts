@@ -1,6 +1,21 @@
 import type { ExtractedRow } from "./parser";
-import type { BPLineItem, DRELineItem } from "../types/financial";
+import type { BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 import { BP_TEMPLATE, DRE_TEMPLATE, ACCOUNT_ALIASES } from "./financial-templates";
+
+interface DictionaryEntry {
+  nomeOriginal: string;
+  contaDestino: string;
+}
+
+export interface BPMapResult {
+  items: BPLineItem[];
+  unmatched: UnmatchedAccount[];
+}
+
+export interface DREMapResult {
+  items: DRELineItem[];
+  unmatched: UnmatchedAccount[];
+}
 
 function normalize(s: string): string {
   return s.toLowerCase()
@@ -18,11 +33,20 @@ function cleanAccountName(name: string): string {
     .trim();
 }
 
-function findBestMatch(conta: string, candidates: string[]): string | null {
+function findBestMatch(conta: string, candidates: string[], dictionaryEntries?: DictionaryEntry[]): string | null {
   const cleaned = cleanAccountName(conta);
   const norm = normalize(cleaned);
 
   if (!norm || norm.length < 2) return null;
+
+  // 0. Dictionary exact match (highest priority — user-defined mappings)
+  if (dictionaryEntries && dictionaryEntries.length > 0) {
+    for (const entry of dictionaryEntries) {
+      if (normalize(entry.nomeOriginal) === norm && candidates.includes(entry.contaDestino)) {
+        return entry.contaDestino;
+      }
+    }
+  }
 
   // 1. Exact match (case-insensitive, accent-insensitive)
   for (const c of candidates) {
@@ -100,7 +124,10 @@ function classificacaoFromCode(code: string): string {
   return "0";
 }
 
-export function mapExtractedToBP(linhas: ExtractedRow[]): BPLineItem[] {
+export function mapExtractedToBP(
+  linhas: ExtractedRow[],
+  dictionaryEntries?: DictionaryEntry[]
+): BPMapResult {
   const templateNames = BP_TEMPLATE.map(t => t.conta);
   const result: BPLineItem[] = BP_TEMPLATE.map(t => ({
     classificacao: t.classificacao,
@@ -110,7 +137,8 @@ export function mapExtractedToBP(linhas: ExtractedRow[]): BPLineItem[] {
     editado: false,
   }));
 
-  const unmatched: BPLineItem[] = [];
+  const unmatchedBP: BPLineItem[] = [];
+  const unmatchedAccounts: UnmatchedAccount[] = [];
   const matched = new Set<string>();
 
   // Build code index to detect parent accounts with children
@@ -128,18 +156,19 @@ export function mapExtractedToBP(linhas: ExtractedRow[]): BPLineItem[] {
       const depth = linha.code.split(".").length;
       if (depth >= 3 && isParentAccount(linha.code, codeSet)) {
         const nivel = Math.max(depth - 1, 0);
-        unmatched.push({
+        unmatchedBP.push({
           classificacao: classificacaoFromCode(linha.code),
           conta: linha.conta,
           valores: { ...linha.valores },
           nivel,
           editado: false,
         });
+        unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores } });
         continue;
       }
     }
 
-    const match = findBestMatch(linha.conta, templateNames);
+    const match = findBestMatch(linha.conta, templateNames, dictionaryEntries);
     if (match) {
       const idx = result.findIndex(r => r.conta === match);
       if (idx >= 0) {
@@ -154,18 +183,22 @@ export function mapExtractedToBP(linhas: ExtractedRow[]): BPLineItem[] {
     } else {
       // Unmatched — include for manual review, with proper nivel from code depth
       const depth = linha.code ? linha.code.split(".").length : 4;
-      unmatched.push({
+      unmatchedBP.push({
         classificacao: linha.code ? classificacaoFromCode(linha.code) : "0",
         conta: linha.conta,
         valores: { ...linha.valores },
         nivel: Math.max(depth - 1, 2),
         editado: false,
       });
+      unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores } });
     }
   }
 
-  // Append unmatched at the end
-  return [...result, ...unmatched];
+  // Items = template + unmatched appended (preserves existing behavior for BP display)
+  return {
+    items: [...result, ...unmatchedBP],
+    unmatched: unmatchedAccounts,
+  };
 }
 
 // DRE totalizer names that should NOT be mapped via fuzzy matching.
@@ -175,7 +208,10 @@ const DRE_SKIP_TOTALS = new Set([
   "despesas operacionais",  // total of all operating expenses — sub-items mapped individually
 ]);
 
-export function mapExtractedToDRE(linhas: ExtractedRow[]): DRELineItem[] {
+export function mapExtractedToDRE(
+  linhas: ExtractedRow[],
+  dictionaryEntries?: DictionaryEntry[]
+): DREMapResult {
   const templateNames = DRE_TEMPLATE.map(t => t.conta);
   const result: DRELineItem[] = DRE_TEMPLATE.map(t => ({
     conta: t.conta,
@@ -184,16 +220,18 @@ export function mapExtractedToDRE(linhas: ExtractedRow[]): DRELineItem[] {
     editado: false,
   }));
 
-  const unmatched: DRELineItem[] = [];
+  const unmatchedDRE: DRELineItem[] = [];
+  const unmatchedAccounts: UnmatchedAccount[] = [];
 
   for (const linha of linhas) {
     // Skip known totalizer lines that would pollute sub-item mapping via fuzzy match
     const normConta = linha.conta.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
     if (DRE_SKIP_TOTALS.has(normConta)) {
-      unmatched.push({ conta: linha.conta, valores: { ...linha.valores }, subtotal: false, editado: false });
+      unmatchedDRE.push({ conta: linha.conta, valores: { ...linha.valores }, subtotal: false, editado: false });
+      unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores } });
       continue;
     }
-    const match = findBestMatch(linha.conta, templateNames);
+    const match = findBestMatch(linha.conta, templateNames, dictionaryEntries);
     if (match) {
       const idx = result.findIndex(r => r.conta === match);
       if (idx >= 0) {
@@ -204,16 +242,20 @@ export function mapExtractedToDRE(linhas: ExtractedRow[]): DRELineItem[] {
         }
       }
     } else {
-      unmatched.push({
+      unmatchedDRE.push({
         conta: linha.conta,
         valores: { ...linha.valores },
         subtotal: false,
         editado: false,
       });
+      unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores } });
     }
   }
 
-  return [...result, ...unmatched];
+  return {
+    items: [...result, ...unmatchedDRE],
+    unmatched: unmatchedAccounts,
+  };
 }
 
 /**
