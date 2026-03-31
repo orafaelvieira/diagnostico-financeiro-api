@@ -35,32 +35,109 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
   });
 
   // Detecta a linha de cabeçalho (que contém os períodos/meses)
-  let headerRowIdx = 0;
+  // Suporta variações de ERPs: TOTVS, SAP, Omie, Conta Azul, etc.
+  let headerRowIdx = -1;
   let periodos: string[] = [];
-  for (let i = 0; i < Math.min(10, rows.length); i++) {
+  let contaColIdx = 0; // Coluna onde estão os nomes das contas
+
+  // Padrões de período: meses abreviados, datas completas, trimestres, anos, "Saldo"
+  const periodPattern = /jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez|20\d\d|q[1-4]|trim|semest|\d{2}\/\d{2}\/\d{4}|\d{2}\/\d{4}|saldo|acumulado|realizado|orçado|orcado|budget|forecast|anterior|atual/i;
+
+  // Padrões para detectar coluna de nome de conta
+  const contaHeaderPattern = /^(conta|descri[çc][ãa]o|nome|rubrica|item|classifica[çc][ãa]o|plano\s*de\s*contas)$/i;
+
+  // Scan first 20 rows (some ERPs have metadata before header)
+  for (let i = 0; i < Math.min(20, rows.length); i++) {
     const row = rows[i] as unknown[];
-    const candidates = row.slice(1).filter(
-      (v) => v && /jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez|20\d\d|q[1-4]/i.test(String(v))
+    if (!row || row.length < 2) continue;
+
+    // Count how many cells match period patterns
+    const periodCells: { idx: number; val: string }[] = [];
+    for (let j = 0; j < row.length; j++) {
+      const cell = row[j];
+      if (cell && periodPattern.test(String(cell))) {
+        periodCells.push({ idx: j, val: String(cell) });
+      }
+    }
+
+    // Also check for "Conta"/"Descrição" header to identify conta column
+    for (let j = 0; j < row.length; j++) {
+      const cell = row[j];
+      if (cell && contaHeaderPattern.test(String(cell).trim())) {
+        contaColIdx = j;
+      }
+    }
+
+    // Need at least 1 period match (some files have single period)
+    if (periodCells.length >= 1) {
+      // If we found 2+, we're confident this is the header
+      // If only 1, check if the row also has a "conta" type header
+      if (periodCells.length >= 2 || (periodCells.length === 1 && row.length <= 4)) {
+        headerRowIdx = i;
+        // Build periodos from all cells after the conta column
+        periodos = [];
+        for (let j = 0; j < row.length; j++) {
+          if (j === contaColIdx) continue;
+          const cell = row[j];
+          if (cell) {
+            const str = String(cell).trim();
+            if (str) periodos.push(str);
+          }
+        }
+        break;
+      }
+    }
+
+    // Fallback: detect header rows that have serial date numbers (Excel date format)
+    // Excel stores dates as numbers (e.g., 45292 = 2024-01-01)
+    const numericCells = row.slice(1).filter(
+      (v) => typeof v === "number" && v > 40000 && v < 50000
     );
-    if (candidates.length >= 2) {
+    if (numericCells.length >= 2) {
       headerRowIdx = i;
-      periodos = row.slice(1).map((v) => (v ? String(v) : "")).filter(Boolean);
+      periodos = row.slice(contaColIdx + 1).map((v) => {
+        if (typeof v === "number" && v > 40000 && v < 50000) {
+          // Convert Excel serial date to readable period
+          const date = new Date((v - 25569) * 86400 * 1000);
+          const month = date.toLocaleString("pt-BR", { month: "short" });
+          const year = date.getFullYear();
+          return `${month}/${year}`;
+        }
+        return v ? String(v) : "";
+      }).filter(Boolean);
       break;
+    }
+  }
+
+  // If no header found via pattern matching, try fallback: first row with text in col 0 and numbers in col 1+
+  if (headerRowIdx === -1) {
+    headerRowIdx = 0;
+    // Use generic period labels
+    if (rows.length > 0) {
+      const firstRow = rows[0] as unknown[];
+      periodos = firstRow.slice(1).map((v, i) => v ? String(v) : `P${i + 1}`).filter(Boolean);
     }
   }
 
   const linhas: ExtractedRow[] = [];
   for (let i = headerRowIdx + 1; i < rows.length; i++) {
     const row = rows[i] as unknown[];
-    const conta = String(row[0] ?? "").trim();
+    if (!row || row.length === 0) continue;
+
+    const conta = String(row[contaColIdx] ?? "").trim();
     if (!conta || conta.length < 2) continue;
+    // Skip pure numeric "conta" names (likely row numbers or codes without names)
+    if (/^\d+$/.test(conta)) continue;
 
     const valores: Record<string, number> = {};
-    row.slice(1).forEach((val, idx) => {
-      const periodo = periodos[idx];
-      const num = cleanValue(val);
+    let valIdx = 0;
+    for (let j = 0; j < row.length; j++) {
+      if (j === contaColIdx) continue;
+      const periodo = periodos[valIdx];
+      const num = cleanValue(row[j]);
       if (periodo && num !== null) valores[periodo] = num;
-    });
+      valIdx++;
+    }
 
     if (Object.keys(valores).length > 0) {
       linhas.push({ conta, valores });

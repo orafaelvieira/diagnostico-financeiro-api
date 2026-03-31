@@ -1,0 +1,307 @@
+import type { BPLineItem, DRELineItem } from "../types/financial";
+
+export interface ValidationAlert {
+  tipo: "erro" | "aviso" | "info";
+  area: string;
+  mensagem: string;
+  detalhes?: string;
+  confianca?: number; // 0-100, how confident we are in the extracted data
+}
+
+export interface ValidationResult {
+  valido: boolean;
+  alertas: ValidationAlert[];
+  confiancaGeral: number; // 0-100, overall confidence score
+  equacaoPatrimonial: boolean;
+  composicaoAtivo: boolean;
+  composicaoPassivo: boolean;
+}
+
+/**
+ * Find a BP line item value by conta name for a given period.
+ */
+function bpVal(bp: BPLineItem[], conta: string, periodo: string): number {
+  const item = bp.find(b => b.conta === conta);
+  return item?.valores[periodo] ?? 0;
+}
+
+/**
+ * Sum BP values by classificacao for a given period.
+ */
+function bpByClass(bp: BPLineItem[], classificacao: string, periodo: string): number {
+  return bp
+    .filter(b => b.classificacao === classificacao)
+    .reduce((sum, b) => sum + (b.valores[periodo] ?? 0), 0);
+}
+
+/**
+ * Find a DRE line item value by conta name for a given period.
+ */
+function dreVal(dre: DRELineItem[], conta: string, periodo: string): number {
+  const item = dre.find(d => d.conta === conta);
+  return item?.valores[periodo] ?? 0;
+}
+
+/**
+ * Check if a value is approximately equal to another within a tolerance.
+ * Uses relative tolerance for large numbers and absolute tolerance for small ones.
+ */
+function approxEqual(a: number, b: number, tolerancePct: number = 1): boolean {
+  if (a === 0 && b === 0) return true;
+  const maxVal = Math.max(Math.abs(a), Math.abs(b));
+  if (maxVal < 1) return Math.abs(a - b) < 0.01; // absolute tolerance for tiny values
+  return Math.abs(a - b) / maxVal * 100 <= tolerancePct;
+}
+
+/**
+ * Format a number as Brazilian currency for display in alerts.
+ */
+function fmtBRL(val: number): string {
+  return val.toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+/**
+ * Validate structured financial data (BP and DRE) for consistency.
+ * Checks accounting equations, signs, completeness, and cross-document consistency.
+ */
+export function validateFinancialData(
+  bp: BPLineItem[],
+  dre: DRELineItem[],
+  periodos: string[]
+): ValidationResult {
+  const alertas: ValidationAlert[] = [];
+  let equacaoPatrimonial = true;
+  let composicaoAtivo = true;
+  let composicaoPassivo = true;
+
+  for (const periodo of periodos) {
+    // ===== 1. Equação Patrimonial: Ativo Total = Passivo Total =====
+    // In Brazilian accounting, Passivo Total includes PC + PNC + PL
+    const ativoTotal = bpVal(bp, "Ativo Total", periodo);
+    const passivoTotal = Math.abs(bpVal(bp, "Passivo Total", periodo));
+
+    if (ativoTotal !== 0 && passivoTotal !== 0) {
+      if (!approxEqual(ativoTotal, passivoTotal, 2)) {
+        equacaoPatrimonial = false;
+        alertas.push({
+          tipo: "erro",
+          area: "Equação Patrimonial",
+          mensagem: `Ativo Total (${fmtBRL(ativoTotal)}) ≠ Passivo Total (${fmtBRL(passivoTotal)}) em ${periodo}`,
+          detalhes: `Diferença: ${fmtBRL(Math.abs(ativoTotal - passivoTotal))} (${((Math.abs(ativoTotal - passivoTotal) / Math.max(ativoTotal, passivoTotal)) * 100).toFixed(2)}%)`,
+        });
+      }
+    }
+
+    // ===== 2. Composição do Ativo: AC + ANC = Ativo Total =====
+    const ativoCirculante = bpVal(bp, "Ativo Circulante", periodo);
+    const ativoNaoCirculante = bpVal(bp, "Ativo Realizável a Longo Prazo", periodo);
+
+    if (ativoTotal !== 0 && (ativoCirculante !== 0 || ativoNaoCirculante !== 0)) {
+      const somaAtivo = ativoCirculante + ativoNaoCirculante;
+      if (!approxEqual(somaAtivo, ativoTotal, 2)) {
+        composicaoAtivo = false;
+        alertas.push({
+          tipo: "aviso",
+          area: "Composição do Ativo",
+          mensagem: `AC (${fmtBRL(ativoCirculante)}) + ANC (${fmtBRL(ativoNaoCirculante)}) ≠ Ativo Total (${fmtBRL(ativoTotal)}) em ${periodo}`,
+          detalhes: `Soma: ${fmtBRL(somaAtivo)}, diferença: ${fmtBRL(Math.abs(somaAtivo - ativoTotal))}`,
+        });
+      }
+    }
+
+    // ===== 3. Composição do Passivo: PC + PNC + PL = Passivo Total =====
+    const passivoCirculante = Math.abs(bpVal(bp, "Passivo Circulante", periodo));
+    const passivoNaoCirculante = Math.abs(bpVal(bp, "Passivo Não Circulante", periodo));
+    const patrimonioLiquido = Math.abs(bpVal(bp, "Patrimônio Líquido", periodo));
+
+    if (passivoTotal !== 0 && (passivoCirculante !== 0 || passivoNaoCirculante !== 0 || patrimonioLiquido !== 0)) {
+      const somaPassivo = passivoCirculante + passivoNaoCirculante + patrimonioLiquido;
+      if (!approxEqual(somaPassivo, passivoTotal, 2)) {
+        composicaoPassivo = false;
+        alertas.push({
+          tipo: "aviso",
+          area: "Composição do Passivo",
+          mensagem: `PC (${fmtBRL(passivoCirculante)}) + PNC (${fmtBRL(passivoNaoCirculante)}) + PL (${fmtBRL(patrimonioLiquido)}) ≠ Passivo Total (${fmtBRL(passivoTotal)}) em ${periodo}`,
+          detalhes: `Soma: ${fmtBRL(somaPassivo)}, diferença: ${fmtBRL(Math.abs(somaPassivo - passivoTotal))}`,
+        });
+      }
+    }
+
+    // ===== 4. DRE: Verificação de sinal =====
+    // Receita Bruta deve ser positiva
+    const recBruta = dreVal(dre, "Receita Bruta de Vendas e/ou Serviços", periodo);
+    if (recBruta < 0) {
+      alertas.push({
+        tipo: "aviso",
+        area: "Sinais DRE",
+        mensagem: `Receita Bruta é negativa (${fmtBRL(recBruta)}) em ${periodo} — pode indicar inversão de sinal`,
+      });
+    }
+
+    // Deduções devem ser negativas ou zero
+    const deducoes = dreVal(dre, "Deduções da Receita Bruta", periodo);
+    if (deducoes > 0) {
+      alertas.push({
+        tipo: "aviso",
+        area: "Sinais DRE",
+        mensagem: `Deduções da Receita Bruta é positiva (${fmtBRL(deducoes)}) em ${periodo} — deveria ser negativa`,
+      });
+    }
+
+    // Custos devem ser negativos ou zero
+    const custoOp = dreVal(dre, "Custo Operacional", periodo);
+    if (custoOp > 0) {
+      alertas.push({
+        tipo: "aviso",
+        area: "Sinais DRE",
+        mensagem: `Custo Operacional é positivo (${fmtBRL(custoOp)}) em ${periodo} — deveria ser negativo`,
+      });
+    }
+
+    // ===== 5. DRE: Receita Líquida = Receita Bruta + Deduções =====
+    const recLiquida = dreVal(dre, "Receita Líquida", periodo);
+    if (recBruta !== 0 && deducoes !== 0 && recLiquida !== 0) {
+      const expected = recBruta + deducoes;
+      if (!approxEqual(recLiquida, expected, 2)) {
+        alertas.push({
+          tipo: "aviso",
+          area: "DRE Consistência",
+          mensagem: `Receita Líquida (${fmtBRL(recLiquida)}) ≠ Receita Bruta (${fmtBRL(recBruta)}) + Deduções (${fmtBRL(deducoes)}) em ${periodo}`,
+          detalhes: `Esperado: ${fmtBRL(expected)}`,
+        });
+      }
+    }
+
+    // ===== 6. Resultado Bruto = Receita Líquida + Custo Operacional =====
+    const resBruto = dreVal(dre, "Resultado Bruto", periodo);
+    if (recLiquida !== 0 && custoOp !== 0 && resBruto !== 0) {
+      const expected = recLiquida + custoOp;
+      if (!approxEqual(resBruto, expected, 2)) {
+        alertas.push({
+          tipo: "aviso",
+          area: "DRE Consistência",
+          mensagem: `Resultado Bruto (${fmtBRL(resBruto)}) ≠ Receita Líquida + CMV em ${periodo}`,
+          detalhes: `Esperado: ${fmtBRL(expected)}`,
+        });
+      }
+    }
+  }
+
+  // ===== 7. Completeness checks =====
+  const hasAtivoTotal = bp.some(b => b.conta === "Ativo Total" && Object.values(b.valores).some(v => v !== 0));
+  const hasPassivoTotal = bp.some(b => b.conta === "Passivo Total" && Object.values(b.valores).some(v => v !== 0));
+  const hasPC = bp.some(b => b.conta === "Passivo Circulante" && Object.values(b.valores).some(v => v !== 0));
+  const hasPL = bp.some(b => b.conta === "Patrimônio Líquido" && Object.values(b.valores).some(v => v !== 0));
+  const hasRecBruta = dre.some(d => d.conta === "Receita Bruta de Vendas e/ou Serviços" && Object.values(d.valores).some(v => v !== 0));
+  const hasLucroLiq = dre.some(d => d.conta === "Lucro ou Prejuízo do Período" && Object.values(d.valores).some(v => v !== 0));
+
+  if (!hasAtivoTotal) {
+    alertas.push({ tipo: "aviso", area: "Completude BP", mensagem: "Ativo Total não encontrado ou zerado no BP" });
+  }
+  if (!hasPassivoTotal) {
+    alertas.push({ tipo: "aviso", area: "Completude BP", mensagem: "Passivo Total não encontrado ou zerado no BP" });
+  }
+  if (!hasPC) {
+    alertas.push({ tipo: "aviso", area: "Completude BP", mensagem: "Passivo Circulante não encontrado — indicadores de liquidez não serão calculados" });
+  }
+  if (!hasPL) {
+    alertas.push({ tipo: "aviso", area: "Completude BP", mensagem: "Patrimônio Líquido não encontrado — indicadores de rentabilidade comprometidos" });
+  }
+  if (!hasRecBruta) {
+    alertas.push({ tipo: "info", area: "Completude DRE", mensagem: "Receita Bruta não encontrada na DRE — margens não serão calculadas" });
+  }
+  if (!hasLucroLiq) {
+    alertas.push({ tipo: "info", area: "Completude DRE", mensagem: "Lucro Líquido não encontrado na DRE — ROE/ROA dependem do BP" });
+  }
+
+  // ===== 8. Calculate overall confidence score =====
+  let confiancaGeral = 100;
+
+  // Deduct for missing critical items
+  if (!hasAtivoTotal) confiancaGeral -= 15;
+  if (!hasPassivoTotal) confiancaGeral -= 15;
+  if (!hasPC) confiancaGeral -= 10;
+  if (!hasPL) confiancaGeral -= 10;
+  if (!hasRecBruta) confiancaGeral -= 10;
+  if (!hasLucroLiq) confiancaGeral -= 5;
+
+  // Deduct for equation failures
+  if (!equacaoPatrimonial) confiancaGeral -= 20;
+  if (!composicaoAtivo) confiancaGeral -= 5;
+  if (!composicaoPassivo) confiancaGeral -= 5;
+
+  // Deduct for sign warnings
+  const signWarnings = alertas.filter(a => a.area === "Sinais DRE").length;
+  confiancaGeral -= signWarnings * 3;
+
+  // Deduct for DRE consistency issues
+  const dreWarnings = alertas.filter(a => a.area === "DRE Consistência").length;
+  confiancaGeral -= dreWarnings * 5;
+
+  // Count how many BP lines have non-zero values (data density)
+  const bpFilled = bp.filter(b => Object.values(b.valores).some(v => v !== 0)).length;
+  const bpTotal = bp.length;
+  const bpDensity = bpTotal > 0 ? bpFilled / bpTotal : 0;
+  if (bpDensity < 0.2) confiancaGeral -= 10;
+
+  confiancaGeral = Math.max(0, Math.min(100, confiancaGeral));
+
+  return {
+    valido: equacaoPatrimonial && alertas.filter(a => a.tipo === "erro").length === 0,
+    alertas,
+    confiancaGeral,
+    equacaoPatrimonial,
+    composicaoAtivo,
+    composicaoPassivo,
+  };
+}
+
+/**
+ * Benford's Law analysis: check if the distribution of first digits
+ * follows the expected logarithmic distribution. Anomalies may indicate
+ * fabricated or erroneous data.
+ */
+export function benfordAnalysis(values: number[]): {
+  passesTest: boolean;
+  chiSquared: number;
+  details: string;
+} {
+  // Benford's expected distribution for digits 1-9
+  const expected = [0.301, 0.176, 0.125, 0.097, 0.079, 0.067, 0.058, 0.051, 0.046];
+  const counts = new Array(9).fill(0);
+  let total = 0;
+
+  for (const v of values) {
+    const abs = Math.abs(v);
+    if (abs < 1) continue; // skip zero and very small values
+    const firstDigit = parseInt(String(abs).replace(/[^1-9]/, "").charAt(0));
+    if (firstDigit >= 1 && firstDigit <= 9) {
+      counts[firstDigit - 1]++;
+      total++;
+    }
+  }
+
+  if (total < 50) {
+    return { passesTest: true, chiSquared: 0, details: "Amostra insuficiente para Benford (<50 valores)" };
+  }
+
+  // Chi-squared test
+  let chiSquared = 0;
+  for (let i = 0; i < 9; i++) {
+    const observed = counts[i] / total;
+    const exp = expected[i];
+    chiSquared += Math.pow(observed - exp, 2) / exp;
+  }
+  chiSquared *= total;
+
+  // Critical value for chi-squared with 8 degrees of freedom at p=0.05 is 15.507
+  const passesTest = chiSquared <= 15.507;
+
+  return {
+    passesTest,
+    chiSquared: Math.round(chiSquared * 100) / 100,
+    details: passesTest
+      ? `Distribuição de Benford OK (χ²=${chiSquared.toFixed(2)}, p>0.05)`
+      : `ALERTA: Distribuição de Benford anômala (χ²=${chiSquared.toFixed(2)}, p<0.05) — verificar dados`,
+  };
+}

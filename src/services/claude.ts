@@ -77,7 +77,7 @@ IMPORTANTE — Análise com dados parciais:
 
 Cálculos esperados a partir do Balanço Patrimonial:
 - Liquidez Corrente = Ativo Circulante / Passivo Circulante (valor absoluto)
-- Endividamento (Dívida/PL) = Passivo Circulante / |Patrimônio Líquido|
+- Endividamento (Dívida/PL) = (Passivo Circulante + Passivo Não Circulante) / |Patrimônio Líquido|
 - Capital de Giro = Ativo Circulante - Passivo Circulante (em R$)
 - ROE = Lucro Líquido (ou Lucros Acumulados do período) / |Patrimônio Líquido| × 100 (%)
 - ROA = Lucro Líquido (ou Lucros Acumulados do período) / Ativo Total × 100 (%)

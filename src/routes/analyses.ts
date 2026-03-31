@@ -7,6 +7,7 @@ import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocum
 import { generateAnalysis } from "../services/claude";
 import { mapExtractedToBP, mapExtractedToDRE, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
+import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem } from "../types/financial";
 
 const router = Router();
@@ -103,12 +104,26 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           const buffer = await downloadFile(doc.storagePath!);
           const parsed = await parseDocument(buffer, doc.nome, doc.tipo);
 
+          // Calculate per-document confidence based on extraction quality
+          const docLinhaCount = parsed.linhas.length;
+          const docPeriodoCount = parsed.periodos.length;
+          let perDocConfianca = 50; // base
+          if (docLinhaCount >= 20) perDocConfianca += 20;
+          else if (docLinhaCount >= 10) perDocConfianca += 15;
+          else if (docLinhaCount >= 5) perDocConfianca += 10;
+          if (docPeriodoCount >= 2) perDocConfianca += 15;
+          else if (docPeriodoCount >= 1) perDocConfianca += 10;
+          // Bonus for having account codes (structured extraction)
+          const hasAccountCodes = parsed.linhas.some(l => l.code);
+          if (hasAccountCodes) perDocConfianca += 10;
+          perDocConfianca = Math.min(95, perDocConfianca);
+
           await prisma.document.update({
             where: { id: doc.id },
             data: {
               dadosExtraidos: { linhas: parsed.linhas, periodos: parsed.periodos } as any,
               status: "Processado",
-              confianca: 85,
+              confianca: perDocConfianca,
             },
           });
           return parsed;
@@ -179,6 +194,31 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
     const indicadores = calculateIndicators(structuredBP, structuredDRE, allPeriodos);
 
+    // Run validation checks on structured data
+    const validacao = validateFinancialData(structuredBP, structuredDRE, allPeriodos);
+    console.log(`[process] Validação: confiança=${validacao.confiancaGeral}%, equação=${validacao.equacaoPatrimonial}, alertas=${validacao.alertas.length}`);
+    for (const alerta of validacao.alertas) {
+      console.log(`[process]   [${alerta.tipo}] ${alerta.area}: ${alerta.mensagem}`);
+    }
+
+    // Run Benford's Law analysis on all financial values
+    const allValues: number[] = [];
+    for (const bp of structuredBP) {
+      allValues.push(...Object.values(bp.valores).filter(v => v !== 0));
+    }
+    for (const dre of structuredDRE) {
+      allValues.push(...Object.values(dre.valores).filter(v => v !== 0));
+    }
+    const benford = benfordAnalysis(allValues);
+    if (!benford.passesTest) {
+      console.log(`[process] ALERTA Benford: ${benford.details}`);
+      validacao.alertas.push({
+        tipo: "aviso",
+        area: "Benford",
+        mensagem: benford.details,
+      });
+    }
+
     const dadosEstruturados: DadosEstruturados = {
       bp: structuredBP,
       dre: structuredDRE,
@@ -187,10 +227,13 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       version: 1,
     };
 
+    // Calculate document-level confidence from validation
+    const docConfianca = validacao.confiancaGeral;
+
     await prisma.analysis.update({
       where: { id: analysis.id },
       data: {
-        dadosEstruturados: dadosEstruturados as any,
+        dadosEstruturados: { ...dadosEstruturados, validacao } as any,
         periodo: allPeriodos.join(" a "),
       },
     });
@@ -210,12 +253,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     );
 
     // 5. Salva resultado e marca como concluída
+    // Combine Claude's confidence with validation confidence for final score
+    const finalConfianca = Math.round((resultado.confianca + docConfianca) / 2);
     const updated = await prisma.analysis.update({
       where: { id: analysis.id },
       data: {
         status: "Concluída",
         resultado: resultado as object,
-        confianca: resultado.confianca,
+        confianca: finalConfianca,
       },
     });
 
@@ -327,6 +372,32 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
     data: { dadosEstruturados: dados as any },
   });
   res.json(dados);
+});
+
+// Validation endpoint — run validation on current structured data
+router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    select: { dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
+
+  const dados = analysis.dadosEstruturados as any as DadosEstruturados;
+  const validacao = validateFinancialData(dados.bp, dados.dre, dados.periodos);
+
+  // Also run Benford's Law
+  const allValues: number[] = [];
+  for (const bp of dados.bp) {
+    allValues.push(...Object.values(bp.valores).filter(v => v !== 0));
+  }
+  for (const dre of dados.dre) {
+    allValues.push(...Object.values(dre.valores).filter(v => v !== 0));
+  }
+  const benford = benfordAnalysis(allValues);
+
+  res.json({ ...validacao, benford });
 });
 
 export default router;
