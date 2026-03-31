@@ -34,7 +34,7 @@ model AccountDictionary {
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([nomeOriginal, tipo, userId])
+  @@unique([nomeOriginal, tipo, grupoConta, userId])
   @@index([userId])
   @@index([nomeOriginal])
   @@map("account_dictionaries")

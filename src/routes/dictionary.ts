@@ -177,15 +177,15 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
     try {
       const result = await prisma.accountDictionary.upsert({
         where: {
-          nomeOriginal_tipo_userId: {
+          nomeOriginal_tipo_grupoConta_userId: {
             nomeOriginal: entry.nomeOriginal,
             tipo: entry.tipo || "BP",
+            grupoConta: entry.grupoConta,
             userId: req.userId!,
           },
         },
         update: {
           contaDestino: entry.contaDestino,
-          grupoConta: entry.grupoConta,
         },
         create: {
           nomeOriginal: entry.nomeOriginal,

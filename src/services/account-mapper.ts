@@ -2,9 +2,10 @@ import type { ExtractedRow } from "./parser";
 import type { BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 import { BP_TEMPLATE, DRE_TEMPLATE, ACCOUNT_ALIASES } from "./financial-templates";
 
-interface DictionaryEntry {
+export interface DictionaryEntry {
   nomeOriginal: string;
   contaDestino: string;
+  grupoConta?: string;  // High-level group: AC, ANC, PC, PNC, PL, or parent name
 }
 
 export interface BPMapResult {
@@ -33,14 +34,85 @@ function cleanAccountName(name: string): string {
     .trim();
 }
 
-function findBestMatch(conta: string, candidates: string[], dictionaryEntries?: DictionaryEntry[]): string | null {
+/**
+ * Map high-level grupo codes (AC, ANC, PC, PNC, PL) to the set of BP_TEMPLATE
+ * classificacao codes that belong to the same section.
+ * E.g., grupo "AC" matches classificacao AF, AO (both sub-groups of Ativo Circulante).
+ */
+const GRUPO_CLASSIF_MAP: Record<string, Set<string>> = {
+  AC: new Set(["AC", "AF", "AO"]),
+  ANC: new Set(["ANC"]),
+  PC: new Set(["PC", "PO", "PF"]),
+  PNC: new Set(["PNC"]),
+  PL: new Set(["PL"]),
+};
+
+/** Check if a template account's classificacao is compatible with an extracted grupo */
+function grupoMatchesClassificacao(grupo: string, classificacao: string): boolean {
+  const allowed = GRUPO_CLASSIF_MAP[grupo];
+  return allowed ? allowed.has(classificacao) : false;
+}
+
+/** Build a map from template conta name → classificacao for fast lookup */
+const templateClassifMap = new Map<string, string>();
+for (const item of BP_TEMPLATE) {
+  templateClassifMap.set(item.conta, item.classificacao);
+}
+
+function findBestMatch(
+  conta: string,
+  candidates: string[],
+  dictionaryEntries?: DictionaryEntry[],
+  grupo?: string
+): string | null {
   const cleaned = cleanAccountName(conta);
   const norm = normalize(cleaned);
 
   if (!norm || norm.length < 2) return null;
 
+  // Helper: check if a candidate is compatible with the extracted grupo
+  const isGrupoCompatible = (candidate: string): boolean => {
+    if (!grupo) return true; // no grupo info → everything is compatible
+    const classif = templateClassifMap.get(candidate);
+    if (!classif) return true; // candidate not in template → allow
+    return grupoMatchesClassificacao(grupo, classif);
+  };
+
   // 0. Dictionary exact match (highest priority — user-defined mappings)
   if (dictionaryEntries && dictionaryEntries.length > 0) {
+    // First pass: match by name + grupo
+    if (grupo) {
+      for (const entry of dictionaryEntries) {
+        if (normalize(entry.nomeOriginal) === norm && candidates.includes(entry.contaDestino)) {
+          // If dictionary entry has a grupoConta, require it to match
+          if (entry.grupoConta && normalize(entry.grupoConta).includes(normalize(grupo))) {
+            return entry.contaDestino;
+          }
+          // Also check if the entry's grupoConta matches the full grupo name
+          const grupoNames: Record<string, string[]> = {
+            AC: ["ativo circulante"],
+            ANC: ["ativo nao circulante", "ativo não circulante"],
+            PC: ["passivo circulante"],
+            PNC: ["passivo nao circulante", "passivo não circulante"],
+            PL: ["patrimonio liquido", "patrimônio líquido"],
+          };
+          const normGrupoConta = entry.grupoConta ? normalize(entry.grupoConta) : "";
+          const grupoAliases = grupoNames[grupo] || [];
+          if (grupoAliases.some(a => normalize(a) === normGrupoConta || normGrupoConta.includes(normalize(a)))) {
+            return entry.contaDestino;
+          }
+        }
+      }
+    }
+    // Second pass: match by name only (no grupo constraint — backward compatible)
+    for (const entry of dictionaryEntries) {
+      if (normalize(entry.nomeOriginal) === norm && candidates.includes(entry.contaDestino)) {
+        if (isGrupoCompatible(entry.contaDestino)) {
+          return entry.contaDestino;
+        }
+      }
+    }
+    // Third pass: name-only match ignoring grupo (last resort for dictionary)
     for (const entry of dictionaryEntries) {
       if (normalize(entry.nomeOriginal) === norm && candidates.includes(entry.contaDestino)) {
         return entry.contaDestino;
@@ -48,23 +120,40 @@ function findBestMatch(conta: string, candidates: string[], dictionaryEntries?: 
     }
   }
 
-  // 1. Exact match (case-insensitive, accent-insensitive)
+  // 1. Exact match (case-insensitive, accent-insensitive) — prefer grupo-compatible
+  for (const c of candidates) {
+    if (normalize(c) === norm && isGrupoCompatible(c)) return c;
+  }
+  // Fallback exact match ignoring grupo
   for (const c of candidates) {
     if (normalize(c) === norm) return c;
   }
 
-  // 2. Alias match — try both original and cleaned name
+  // 2. Alias match — try both original and cleaned name, prefer grupo-compatible
+  for (const name of [conta, cleaned, conta.trim()]) {
+    const aliased = ACCOUNT_ALIASES[name];
+    if (aliased && candidates.includes(aliased) && isGrupoCompatible(aliased)) return aliased;
+  }
+  for (const [alias, canonical] of Object.entries(ACCOUNT_ALIASES)) {
+    if (normalize(alias) === norm && candidates.includes(canonical) && isGrupoCompatible(canonical)) return canonical;
+  }
+  // Alias fallback without grupo
   for (const name of [conta, cleaned, conta.trim()]) {
     const aliased = ACCOUNT_ALIASES[name];
     if (aliased && candidates.includes(aliased)) return aliased;
   }
-
-  // Alias with normalized lookup
   for (const [alias, canonical] of Object.entries(ACCOUNT_ALIASES)) {
     if (normalize(alias) === norm && candidates.includes(canonical)) return canonical;
   }
 
-  // 3. Contains match — extracted conta contains the template name or vice versa
+  // 3. Contains match — prefer grupo-compatible
+  for (const c of candidates) {
+    const normC = normalize(c);
+    if (normC.length >= 4 && norm.length >= 4) {
+      if ((norm.includes(normC) || normC.includes(norm)) && isGrupoCompatible(c)) return c;
+    }
+  }
+  // Contains fallback
   for (const c of candidates) {
     const normC = normalize(c);
     if (normC.length >= 4 && norm.length >= 4) {
@@ -72,7 +161,7 @@ function findBestMatch(conta: string, candidates: string[], dictionaryEntries?: 
     }
   }
 
-  // 4. Keyword match — check if key words overlap significantly
+  // 4. Keyword match — prefer grupo-compatible candidates
   const normWords = norm.split(/\s+/).filter(w => w.length > 2);
   let bestScore = 0;
   let bestCandidate: string | null = null;
@@ -81,12 +170,13 @@ function findBestMatch(conta: string, candidates: string[], dictionaryEntries?: 
     if (cWords.length === 0) continue;
     const overlap = normWords.filter(w => cWords.includes(w)).length;
     const score = overlap / Math.max(cWords.length, 1);
-    // Also compute reverse score (how much of the extracted name matches)
     const reverseScore = overlap / Math.max(normWords.length, 1);
-    const combinedScore = (score + reverseScore) / 2;
+    let combinedScore = (score + reverseScore) / 2;
+
+    // Boost score for grupo-compatible candidates
+    if (grupo && isGrupoCompatible(c)) combinedScore += 0.1;
 
     if (combinedScore > bestScore && overlap >= 1) {
-      // Require higher threshold for single-word overlap
       if (overlap === 1 && score < 0.8) continue;
       bestScore = combinedScore;
       bestCandidate = c;
@@ -108,6 +198,19 @@ function isParentAccount(code: string, allCodes: Set<string>): boolean {
     if (other.startsWith(prefix)) return true;
   }
   return false;
+}
+
+/**
+ * Derive high-level grupo (AC, ANC, PC, PNC, PL) from hierarchical account code.
+ * Used to pass to findBestMatch for group-aware disambiguation.
+ */
+function grupoFromExtractedCode(code: string): string | undefined {
+  if (code.startsWith("1.01")) return "AC";
+  if (code.startsWith("1.02")) return "ANC";
+  if (code.startsWith("2.01")) return "PC";
+  if (code.startsWith("2.02")) return "PNC";
+  if (code.startsWith("2.03")) return "PL";
+  return undefined;
 }
 
 /**
@@ -168,7 +271,9 @@ export function mapExtractedToBP(
       }
     }
 
-    const match = findBestMatch(linha.conta, templateNames, dictionaryEntries);
+    // Pass extracted grupo to findBestMatch for group-aware disambiguation
+    const extractedGrupo = linha.grupo || (linha.code ? grupoFromExtractedCode(linha.code) : undefined);
+    const match = findBestMatch(linha.conta, templateNames, dictionaryEntries, extractedGrupo);
     if (match) {
       const idx = result.findIndex(r => r.conta === match);
       if (idx >= 0) {

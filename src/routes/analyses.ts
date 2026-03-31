@@ -146,22 +146,29 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       where: {
         OR: [{ userId: null }, { userId: req.userId! }],
       },
-      select: { nomeOriginal: true, contaDestino: true, userId: true, tipo: true },
+      select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, tipo: true },
     });
 
-    // User entries override global entries with same nomeOriginal
+    // User entries override global entries with same nomeOriginal+grupoConta
     type DictRow = typeof dictEntries[number];
     const buildDictForType = (tipo: string) => {
-      const dictMap = new Map<string, string>();
+      // Key: nomeOriginal_lower|grupoConta_lower for group-aware dedup
+      const dictMap = new Map<string, { contaDestino: string; grupoConta: string }>();
       // First add global entries
       for (const e of dictEntries.filter((e: DictRow) => e.userId === null && e.tipo === tipo)) {
-        dictMap.set(e.nomeOriginal.toLowerCase(), e.contaDestino);
+        const key = `${e.nomeOriginal.toLowerCase()}|${(e.grupoConta || "").toLowerCase()}`;
+        dictMap.set(key, { contaDestino: e.contaDestino, grupoConta: e.grupoConta || "" });
       }
       // Then override with user entries
       for (const e of dictEntries.filter((e: DictRow) => e.userId !== null && e.tipo === tipo)) {
-        dictMap.set(e.nomeOriginal.toLowerCase(), e.contaDestino);
+        const key = `${e.nomeOriginal.toLowerCase()}|${(e.grupoConta || "").toLowerCase()}`;
+        dictMap.set(key, { contaDestino: e.contaDestino, grupoConta: e.grupoConta || "" });
       }
-      return Array.from(dictMap.entries()).map(([nomeOriginal, contaDestino]) => ({ nomeOriginal, contaDestino }));
+      return Array.from(dictMap.entries()).map(([key, val]) => ({
+        nomeOriginal: key.split("|")[0],
+        contaDestino: val.contaDestino,
+        grupoConta: val.grupoConta,
+      }));
     };
     const dictForBP = buildDictForType("BP");
     const dictForDRE = buildDictForType("DRE");

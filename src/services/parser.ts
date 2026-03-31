@@ -5,6 +5,7 @@ export interface ExtractedRow {
   valores: Record<string, number>; // { "Jan/2025": 1000000, "Fev/2025": 950000, ... }
   code?: string;    // Código hierárquico do plano de contas (ex: "1.01.01")
   indent?: number;  // Nível de indentação no PDF original
+  grupo?: string;   // Grupo pai detectado: "AC" | "ANC" | "PC" | "PNC" | "PL" | undefined
 }
 
 export interface ParsedDocument {
@@ -119,7 +120,42 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
     }
   }
 
+  // Section group detection patterns for BP documents
+  const sectionGroupPatterns: Array<{ pattern: RegExp; grupo: string }> = [
+    { pattern: /^ativo\s*circulante$/i, grupo: "AC" },
+    { pattern: /^a\s*t\s*i\s*v\s*o\s+c\s*i\s*r\s*c\s*u\s*l\s*a\s*n\s*t\s*e$/i, grupo: "AC" },
+    { pattern: /^ativo\s*n[aã]o\s*circulante$/i, grupo: "ANC" },
+    { pattern: /^ativo\s*permanente$/i, grupo: "ANC" },
+    { pattern: /^realiz[aá]vel\s*a?\s*longo\s*prazo$/i, grupo: "ANC" },
+    { pattern: /^passivo\s*circulante$/i, grupo: "PC" },
+    { pattern: /^p\s*a\s*s\s*s\s*i\s*v\s*o\s+c\s*i\s*r\s*c\s*u\s*l\s*a\s*n\s*t\s*e$/i, grupo: "PC" },
+    { pattern: /^passivo\s*n[aã]o\s*circulante$/i, grupo: "PNC" },
+    { pattern: /^exig[ií]vel\s*a?\s*longo\s*prazo$/i, grupo: "PNC" },
+    { pattern: /^passivo\s*exig[ií]vel\s*a?\s*longo\s*prazo$/i, grupo: "PNC" },
+    { pattern: /^patrim[oô]nio\s*l[ií]quido$/i, grupo: "PL" },
+  ];
+
+  function detectGrupoFromName(name: string): string | undefined {
+    const trimmed = name.trim();
+    for (const { pattern, grupo } of sectionGroupPatterns) {
+      if (pattern.test(trimmed)) return grupo;
+    }
+    return undefined;
+  }
+
+  function grupoFromCode(code: string): string | undefined {
+    if (code.startsWith("1.01")) return "AC";
+    if (code.startsWith("1.02")) return "ANC";
+    if (code.startsWith("1")) return undefined; // AT — too broad
+    if (code.startsWith("2.01")) return "PC";
+    if (code.startsWith("2.02")) return "PNC";
+    if (code.startsWith("2.03")) return "PL";
+    return undefined;
+  }
+
   const linhas: ExtractedRow[] = [];
+  let currentGrupo: string | undefined = undefined;
+
   for (let i = headerRowIdx + 1; i < rows.length; i++) {
     const row = rows[i] as unknown[];
     if (!row || row.length === 0) continue;
@@ -128,6 +164,12 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
     if (!conta || conta.length < 2) continue;
     // Skip pure numeric "conta" names (likely row numbers or codes without names)
     if (/^\d+$/.test(conta)) continue;
+
+    // Detect section group change from the account name (e.g., "ATIVO CIRCULANTE" header row)
+    const detectedGrupo = detectGrupoFromName(conta);
+    if (detectedGrupo) {
+      currentGrupo = detectedGrupo;
+    }
 
     const valores: Record<string, number> = {};
     let valIdx = 0;
@@ -140,7 +182,7 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
     }
 
     if (Object.keys(valores).length > 0) {
-      linhas.push({ conta, valores });
+      linhas.push({ conta, valores, grupo: currentGrupo });
     }
   }
 
@@ -431,7 +473,14 @@ function extractMultiColumnPDF(text: string, periodos: string[]): ExtractedRow[]
       }
 
       if (Object.keys(valores).length > 0) {
-        result.push({ conta: name.name, valores, code: name.code, indent: name.indent });
+        // Derive grupo from hierarchical code
+        let grupo: string | undefined;
+        if (name.code.startsWith("1.01")) grupo = "AC";
+        else if (name.code.startsWith("1.02")) grupo = "ANC";
+        else if (name.code.startsWith("2.01")) grupo = "PC";
+        else if (name.code.startsWith("2.02")) grupo = "PNC";
+        else if (name.code.startsWith("2.03")) grupo = "PL";
+        result.push({ conta: name.name, valores, code: name.code, indent: name.indent, grupo });
       }
     }
   } else {

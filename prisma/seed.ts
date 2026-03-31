@@ -162,8 +162,18 @@ const BP_SEED: SeedEntry[] = [
   { nomeOriginal: "Empréstimos", contaDestino: "Empréstimos e Financiamentos - Curto Prazo", grupoConta: "Passivo Circulante" },
   { nomeOriginal: "Financiamentos", contaDestino: "Empréstimos e Financiamentos - Curto Prazo", grupoConta: "Passivo Circulante" },
 
+  // === EMPRÉSTIMOS - GRUPO-AWARE DUPLICATES FOR PNC ===
+  // Same account names but in Passivo Não Circulante → map to long-term equivalents
+  { nomeOriginal: "Emprestimos Bancarios", contaDestino: "Empréstimos e Financiamentos - Longo Prazo", grupoConta: "Passivo Não Circulante" },
+  { nomeOriginal: "Emprestimos e Financiamentos", contaDestino: "Empréstimos e Financiamentos - Longo Prazo", grupoConta: "Passivo Não Circulante" },
+  { nomeOriginal: "Empréstimos", contaDestino: "Empréstimos e Financiamentos - Longo Prazo", grupoConta: "Passivo Não Circulante" },
+  { nomeOriginal: "Financiamentos", contaDestino: "Empréstimos e Financiamentos - Longo Prazo", grupoConta: "Passivo Não Circulante" },
+
   // === PASSIVOS COM PARTES RELACIONADAS - CURTO PRAZO ===
   { nomeOriginal: "Passivos com Partes Relacionadas", contaDestino: "Passivos com Partes Relacionadas - Curto Prazo", grupoConta: "Passivo Circulante" },
+
+  // === PASSIVOS COM PARTES RELACIONADAS - LONGO PRAZO (group-aware duplicate) ===
+  { nomeOriginal: "Passivos com Partes Relacionadas", contaDestino: "Passivos com Partes Relacionadas - Longo Prazo", grupoConta: "Passivo Não Circulante" },
 
   // === DESPESAS ANT. / ADIANTAMENTOS - PASSIVO ===
   { nomeOriginal: "Adiantamento Recebido", contaDestino: "Despesas Ant. / Adiantamentos - Passivo", grupoConta: "Passivo Circulante" },
@@ -224,42 +234,42 @@ async function main() {
 
   for (const entry of BP_SEED) {
     try {
-      await prisma.accountDictionary.upsert({
+      // Try to find existing entry with same nomeOriginal + tipo + grupoConta + userId=null
+      const existing = await prisma.accountDictionary.findFirst({
         where: {
-          nomeOriginal_tipo_userId: {
-            nomeOriginal: entry.nomeOriginal,
-            tipo: "BP",
-            userId: "00000000-0000-0000-0000-000000000000", // placeholder, will use null
-          },
-        },
-        update: {
-          contaDestino: entry.contaDestino,
-          grupoConta: entry.grupoConta,
-        },
-        create: {
           nomeOriginal: entry.nomeOriginal,
-          contaDestino: entry.contaDestino,
-          grupoConta: entry.grupoConta,
           tipo: "BP",
-          // userId is null for global entries
+          grupoConta: entry.grupoConta,
+          userId: null,
         },
       });
-      created++;
-    } catch {
-      // If upsert fails (e.g., null userId unique constraint), try create
-      try {
+
+      if (existing) {
+        // Update existing
+        await prisma.accountDictionary.update({
+          where: { id: existing.id },
+          data: {
+            contaDestino: entry.contaDestino,
+            grupoConta: entry.grupoConta,
+          },
+        });
+        skipped++;
+      } else {
+        // Create new global entry
         await prisma.accountDictionary.create({
           data: {
             nomeOriginal: entry.nomeOriginal,
             contaDestino: entry.contaDestino,
             grupoConta: entry.grupoConta,
             tipo: "BP",
+            // userId is null for global entries
           },
         });
         created++;
-      } catch {
-        skipped++;
       }
+    } catch (err) {
+      console.error(`Error seeding "${entry.nomeOriginal}":`, err);
+      skipped++;
     }
   }
 
