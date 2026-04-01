@@ -253,6 +253,79 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
   return { tipo, linhas, periodos, raw };
 }
 
+/**
+ * Remove detail (child) rows from extracted data by detecting parent-child
+ * relationships via value sums. If row[i]'s value equals the sum of the next
+ * N consecutive rows, those N rows are children and are removed.
+ *
+ * Multi-pass: each pass removes one level of children. Repeats until stable.
+ * This handles nested hierarchies (e.g., level 5 children removed in pass 1,
+ * level 4 children removed in pass 2, leaving only levels 1-3).
+ *
+ * Used for PDFs without hierarchical account codes, where indentation is not
+ * preserved by the PDF parser.
+ */
+function removeChildRowsByValueSum(rows: ExtractedRow[], periodos: string[]): ExtractedRow[] {
+  // Use the first period's value for sum comparison
+  const periodo = periodos[0];
+  if (!periodo) return rows;
+
+  // Limit passes to 2: each pass removes one level of children.
+  // With 2 passes we collapse levels 5→4 then 4→3, keeping levels 1-3.
+  // More passes would over-filter, removing level 2-3 accounts too.
+  const MAX_PASSES = 2;
+
+  let current = rows;
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    let changed = false;
+    const kept: ExtractedRow[] = [];
+    let i = 0;
+
+    while (i < current.length) {
+      const parentVal = current[i].valores[periodo];
+      if (parentVal === undefined || parentVal === 0) {
+        kept.push(current[i]);
+        i++;
+        continue;
+      }
+
+      // Try to find consecutive children whose sum equals this row's value
+      let sum = 0;
+      let childEnd = -1;
+      for (let j = i + 1; j < current.length; j++) {
+        const childVal = current[j].valores[periodo];
+        if (childVal === undefined) break; // gap in data → stop
+        sum += childVal;
+
+        // Check if sum matches parent (tolerance: 0.5% or 1.0, whichever is larger)
+        const tolerance = Math.max(Math.abs(parentVal) * 0.005, 1.0);
+        if (Math.abs(sum - parentVal) < tolerance) {
+          childEnd = j;
+          break;
+        }
+
+        // If sum far exceeds parent, stop looking
+        if (Math.abs(sum) > Math.abs(parentVal) * 2) break;
+      }
+
+      if (childEnd >= 0 && childEnd > i) {
+        // Keep parent, skip children
+        kept.push(current[i]);
+        i = childEnd + 1;
+        changed = true;
+      } else {
+        kept.push(current[i]);
+        i++;
+      }
+    }
+
+    current = kept;
+    if (!changed) break; // stable — no more children to remove
+  }
+
+  return current;
+}
+
 export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocument> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const pdfParse = require("pdf-parse");
@@ -289,6 +362,15 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
   // Fall back to block correlation (multi-column PDFs without account codes, e.g. DRE)
   if (linhas.length === 0) {
     linhas = extractBlockCorrelation(text, periodos);
+  }
+
+  // For BP documents without hierarchical codes, remove detail rows (level 4+)
+  // using value-sum parent-child detection. If row[i].value == sum of next N rows,
+  // those N rows are children of row[i] and should be discarded.
+  // Multi-pass handles nested hierarchies (each pass removes one level of children).
+  const hasAnyCodes = linhas.some(l => l.code);
+  if (!hasAnyCodes && linhas.length > 3) {
+    linhas = removeChildRowsByValueSum(linhas, periodos);
   }
 
   // Gera raw text — sempre inclui o texto original para o Claude
@@ -557,7 +639,7 @@ function extractMultiColumnPDF(text: string, periodos: string[]): ExtractedRow[]
  */
 function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
   const lines = text.split("\n");
-  const result: ExtractedRow[] = [];
+  const rawRows: Array<{ conta: string; valores: Record<string, number>; indent: number }> = [];
 
   // Skip patterns
   const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS|ROBERTO|MARCO|Diretor|Contador|INSCR|LACTOBOM|DEMONSTRATIVO|BALANCO|Conta\d|ContaSaldo)/i;
@@ -569,6 +651,9 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
     const trimmed = line.trim();
     if (!trimmed || trimmed.length < 3) continue;
     if (skipPatterns.test(trimmed)) continue;
+
+    // Capture indentation (leading spaces) for hierarchy detection
+    const indent = line.length - line.trimStart().length;
 
     // Find all BR numbers in the line
     const numMatches = [...trimmed.matchAll(brNumPattern)];
@@ -617,7 +702,36 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
       });
     }
 
-    result.push({ conta, valores });
+    rawRows.push({ conta, valores, indent });
+  }
+
+  // Derive hierarchy depth from indentation levels.
+  // PDFs without account codes use indentation to express hierarchy:
+  //   Level 1: "A T I V O" (minimal indent)
+  //   Level 2: "ATIVO CIRCULANTE" (slight indent)
+  //   Level 3: "DISPONIBILIDADES" (more indent)
+  //   Level 4: "CAIXA" (even more)
+  //   Level 5: "CAIXA MATRIZ" (most indent)
+  // We collect all unique indent values, sort them, and assign depth levels.
+  const uniqueIndents = [...new Set(rawRows.map(r => r.indent))].sort((a, b) => a - b);
+
+  // Only apply indent-based filtering if we have enough distinct levels (3+)
+  // This avoids false filtering on PDFs with uniform indentation.
+  const hasHierarchy = uniqueIndents.length >= 3;
+  const indentToDepth = new Map<number, number>();
+  if (hasHierarchy) {
+    for (let i = 0; i < uniqueIndents.length; i++) {
+      indentToDepth.set(uniqueIndents[i], i + 1); // depth starts at 1
+    }
+  }
+
+  const result: ExtractedRow[] = [];
+  for (const row of rawRows) {
+    const depth = indentToDepth.get(row.indent);
+    // Filter out depth > 3 when hierarchy is detected
+    if (hasHierarchy && depth && depth > 3) continue;
+
+    result.push({ conta: row.conta, valores: row.valores, indent: row.indent });
   }
 
   return result;
@@ -630,7 +744,7 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
  */
 function extractStructuredLines(text: string): ExtractedRow[] {
   const lines = text.split("\n");
-  const result: ExtractedRow[] = [];
+  const rawRows: Array<{ conta: string; valores: Record<string, number>; indent: number }> = [];
 
   // Regex para valor brasileiro no final da linha: -?123.456,78
   const valorRegex = /(-?[\d.]+,\d{2})\s*$/;
@@ -646,6 +760,8 @@ function extractStructuredLines(text: string): ExtractedRow[] {
     const match = trimmed.match(valorRegex);
     if (!match) continue;
 
+    const indent = line.length - line.trimStart().length;
+
     // Extrai o nome da conta (tudo antes do valor)
     const valorStr = match[1];
     const conta = trimmed.slice(0, trimmed.lastIndexOf(valorStr)).trim();
@@ -660,7 +776,24 @@ function extractStructuredLines(text: string): ExtractedRow[] {
     const num = parseFloat(valorStr.replace(/\./g, "").replace(",", "."));
     if (isNaN(num)) continue;
 
-    result.push({ conta, valores: { "_val": num } });
+    rawRows.push({ conta, valores: { "_val": num }, indent });
+  }
+
+  // Apply indent-based depth filtering (same logic as extractInlinePDF)
+  const uniqueIndents = [...new Set(rawRows.map(r => r.indent))].sort((a, b) => a - b);
+  const hasHierarchy = uniqueIndents.length >= 3;
+  const indentToDepth = new Map<number, number>();
+  if (hasHierarchy) {
+    for (let i = 0; i < uniqueIndents.length; i++) {
+      indentToDepth.set(uniqueIndents[i], i + 1);
+    }
+  }
+
+  const result: ExtractedRow[] = [];
+  for (const row of rawRows) {
+    const depth = indentToDepth.get(row.indent);
+    if (hasHierarchy && depth && depth > 3) continue;
+    result.push({ conta: row.conta, valores: row.valores, indent: row.indent });
   }
 
   return result;
