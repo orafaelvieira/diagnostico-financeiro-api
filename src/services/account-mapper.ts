@@ -189,18 +189,6 @@ function findBestMatch(
 }
 
 /**
- * Determine if a hierarchical code is a parent (has children in the input).
- * E.g., "1.01.01" is a parent if "1.01.01.01" exists in the set.
- */
-function isParentAccount(code: string, allCodes: Set<string>): boolean {
-  const prefix = code + ".";
-  for (const other of allCodes) {
-    if (other.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
-/**
  * Derive high-level grupo (AC, ANC, PC, PNC, PL) from hierarchical account code.
  * Used to pass to findBestMatch for group-aware disambiguation.
  */
@@ -244,31 +232,13 @@ export function mapExtractedToBP(
   const unmatchedAccounts: UnmatchedAccount[] = [];
   const matched = new Set<string>();
 
-  // Build code index to detect parent accounts with children
-  const codeSet = new Set(
-    linhas.filter(l => l.code).map(l => l.code!)
-  );
-
   for (const linha of linhas) {
-    // Skip INTERMEDIATE parent accounts (depth >= 3, e.g., "Disponível" code 1.01.01)
-    // that have children in the input. These are sub-group totals that should NOT be
-    // fuzzy-matched to child template accounts.
-    // Top-level accounts (depth 1-2, e.g., "Ativo Total" code "1", "Ativo Circulante" code "1.01")
-    // are always matched normally — they correspond to template entries.
+    // Skip accounts deeper than level 3 — detail-level accounts (e.g., "Banco do Brasil"
+    // code 1.01.01.01) are discarded. Level 3 subtotals already contain the aggregated values.
+    // The parser also filters depth > 3, but this is a safety net for data that bypasses it.
     if (linha.code) {
       const depth = linha.code.split(".").length;
-      if (depth >= 3 && isParentAccount(linha.code, codeSet)) {
-        const nivel = Math.max(depth - 1, 0);
-        unmatchedBP.push({
-          classificacao: classificacaoFromCode(linha.code),
-          conta: linha.conta,
-          valores: { ...linha.valores },
-          nivel,
-          editado: false,
-        });
-        unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores } });
-        continue;
-      }
+      if (depth > 3) continue; // silently discard
     }
 
     // Pass extracted grupo to findBestMatch for group-aware disambiguation

@@ -40,6 +40,12 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
   let headerRowIdx = -1;
   let periodos: string[] = [];
   let contaColIdx = 0; // Coluna onde estão os nomes das contas
+  let codeColIdx = -1; // Coluna com código hierárquico (ex: "1.01.01")
+
+  // Padrão para detectar coluna de código hierárquico no header
+  const codeHeaderPattern = /^(c[oó]digo|code|cod\.?|cta\.?|conta\s*cont[aá]bil|classif\.?|reduzido)$/i;
+  // Padrão para detectar conteúdo de código hierárquico em células de dados
+  const codeContentPattern = /^\d+(\.\d+)+$/; // "1.01", "1.01.01", "2.03.01"
 
   // Padrões de período: meses abreviados, datas completas, trimestres, anos, "Saldo"
   const periodPattern = /jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez|20\d\d|q[1-4]|trim|semest|\d{2}\/\d{2}\/\d{4}|\d{2}\/\d{4}|saldo|acumulado|realizado|orçado|orcado|budget|forecast|anterior|atual/i;
@@ -62,10 +68,16 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
     }
 
     // Also check for "Conta"/"Descrição" header to identify conta column
+    // and "Código" header to identify code column
     for (let j = 0; j < row.length; j++) {
       const cell = row[j];
-      if (cell && contaHeaderPattern.test(String(cell).trim())) {
+      if (!cell) continue;
+      const cellStr = String(cell).trim();
+      if (contaHeaderPattern.test(cellStr)) {
         contaColIdx = j;
+      }
+      if (codeHeaderPattern.test(cellStr)) {
+        codeColIdx = j;
       }
     }
 
@@ -75,10 +87,10 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
       // If only 1, check if the row also has a "conta" type header
       if (periodCells.length >= 2 || (periodCells.length === 1 && row.length <= 4)) {
         headerRowIdx = i;
-        // Build periodos from all cells after the conta column
+        // Build periodos from all cells, excluding conta and code columns
         periodos = [];
         for (let j = 0; j < row.length; j++) {
-          if (j === contaColIdx) continue;
+          if (j === contaColIdx || j === codeColIdx) continue;
           const cell = row[j];
           if (cell) {
             const str = String(cell).trim();
@@ -117,6 +129,30 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
     if (rows.length > 0) {
       const firstRow = rows[0] as unknown[];
       periodos = firstRow.slice(1).map((v, i) => v ? String(v) : `P${i + 1}`).filter(Boolean);
+    }
+  }
+
+  // Auto-detect code column from data content if not found in header
+  // Scan a few data rows to see if any column consistently has hierarchical codes
+  if (codeColIdx === -1 && headerRowIdx >= 0) {
+    const sampleEnd = Math.min(headerRowIdx + 10, rows.length);
+    const codeHits: Record<number, number> = {};
+    for (let i = headerRowIdx + 1; i < sampleEnd; i++) {
+      const row = rows[i] as unknown[];
+      if (!row) continue;
+      for (let j = 0; j < Math.min(row.length, 3); j++) { // only check first 3 columns
+        const cell = row[j];
+        if (cell && codeContentPattern.test(String(cell).trim())) {
+          codeHits[j] = (codeHits[j] || 0) + 1;
+        }
+      }
+    }
+    // If a column has 3+ code-like values, it's the code column
+    for (const [col, count] of Object.entries(codeHits)) {
+      if (count >= 3) {
+        codeColIdx = parseInt(col);
+        break;
+      }
     }
   }
 
@@ -165,16 +201,32 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
     // Skip pure numeric "conta" names (likely row numbers or codes without names)
     if (/^\d+$/.test(conta)) continue;
 
-    // Detect section group change from the account name (e.g., "ATIVO CIRCULANTE" header row)
-    const detectedGrupo = detectGrupoFromName(conta);
+    // Extract hierarchical code if code column was detected
+    let code: string | undefined;
+    if (codeColIdx >= 0) {
+      const codeCell = row[codeColIdx];
+      if (codeCell && codeContentPattern.test(String(codeCell).trim())) {
+        code = String(codeCell).trim();
+      }
+    }
+
+    // Detect section group: from code first, then from account name
+    const grupoFromCodeVal = code ? grupoFromCode(code) : undefined;
+    const detectedGrupo = grupoFromCodeVal || detectGrupoFromName(conta);
     if (detectedGrupo) {
       currentGrupo = detectedGrupo;
+    }
+
+    // Skip accounts deeper than level 3 when code is available
+    if (code) {
+      const depth = code.split(".").length;
+      if (depth > 3) continue;
     }
 
     const valores: Record<string, number> = {};
     let valIdx = 0;
     for (let j = 0; j < row.length; j++) {
-      if (j === contaColIdx) continue;
+      if (j === contaColIdx || j === codeColIdx) continue; // skip conta and code columns
       const periodo = periodos[valIdx];
       const num = cleanValue(row[j]);
       if (periodo && num !== null) valores[periodo] = num;
@@ -182,7 +234,7 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
     }
 
     if (Object.keys(valores).length > 0) {
-      linhas.push({ conta, valores, grupo: currentGrupo });
+      linhas.push({ conta, valores, code, grupo: currentGrupo });
     }
   }
 
@@ -465,6 +517,11 @@ function extractMultiColumnPDF(text: string, periodos: string[]): ExtractedRow[]
     for (let i = 0; i < count; i++) {
       const name = nameLines[i];
       const vals = allValueBlocks[i];
+
+      // Skip accounts deeper than level 3
+      const depth = name.code.split(".").length;
+      if (depth > 3) continue;
+
       const valores: Record<string, number> = {};
 
       // Map values to periods
