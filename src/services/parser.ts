@@ -329,7 +329,59 @@ function removeChildRowsByValueSum(rows: ExtractedRow[], periodos: string[]): Ex
 export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocument> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const pdfParse = require("pdf-parse");
-  const data = await pdfParse(buffer);
+
+  // Custom page renderer that preserves real x-coordinates as indentation.
+  // pdf-parse's default renderer strips all whitespace/positioning,
+  // making it impossible to detect account hierarchy from indentation.
+  // By using pdfjs-dist's getTextContent() API, we extract each text item's
+  // x-coordinate (transform[4]) and convert it to leading spaces.
+  const renderPage = async (pageData: any) => {
+    const content = await pageData.getTextContent({
+      normalizeWhitespace: false,
+      disableCombineTextItems: false,
+    });
+    const items = content.items as Array<{ str: string; transform: number[] }>;
+    if (!items || items.length === 0) return "";
+
+    // Group text items by y-coordinate (same visual line)
+    // Round y to nearest 3 units to merge items on the same line
+    const lineMap = new Map<number, Array<{ str: string; x: number }>>();
+    for (const item of items) {
+      if (!item.str || !item.str.trim()) continue;
+      if (!item.transform || item.transform.length < 6) continue;
+      const x = Math.round(item.transform[4]);
+      const y = Math.round(item.transform[5]);
+      const yKey = Math.round(y / 3) * 3;
+      if (!lineMap.has(yKey)) lineMap.set(yKey, []);
+      lineMap.get(yKey)!.push({ str: item.str, x });
+    }
+
+    // Find minimum x across all text items (= left margin of this page)
+    let minPageX = Infinity;
+    for (const lineItems of lineMap.values()) {
+      for (const item of lineItems) {
+        if (item.x < minPageX) minPageX = item.x;
+      }
+    }
+    if (minPageX === Infinity) minPageX = 0;
+
+    // Sort lines top-to-bottom (descending y in PDF coordinate system)
+    const sortedLines = [...lineMap.entries()].sort((a, b) => b[0] - a[0]);
+
+    const textLines: string[] = [];
+    for (const [, lineItems] of sortedLines) {
+      lineItems.sort((a, b) => a.x - b.x);
+      // Convert x-offset relative to page margin into leading spaces
+      // ~3 PDF units ≈ 1 character indent
+      const relativeX = Math.max(0, lineItems[0].x - minPageX);
+      const spaces = " ".repeat(Math.round(relativeX / 3));
+      textLines.push(spaces + lineItems.map(i => i.str).join(" "));
+    }
+
+    return textLines.join("\n");
+  };
+
+  const data = await pdfParse(buffer, { pagerender: renderPage });
   const text = data.text as string;
 
   // Detect periods from text
@@ -364,12 +416,15 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
     linhas = extractBlockCorrelation(text, periodos);
   }
 
-  // For BP documents without hierarchical codes, remove detail rows (level 4+)
-  // using value-sum parent-child detection. If row[i].value == sum of next N rows,
-  // those N rows are children of row[i] and should be discarded.
-  // Multi-pass handles nested hierarchies (each pass removes one level of children).
+  // Fallback for PDFs without hierarchical codes AND where indent detection
+  // didn't produce a hierarchy (e.g., all items at same x-coordinate):
+  // use value-sum parent-child detection to remove detail rows.
   const hasAnyCodes = linhas.some(l => l.code);
-  if (!hasAnyCodes && linhas.length > 3) {
+  const hasIndentHierarchy = (() => {
+    const uniqueIndents = new Set(linhas.map(l => l.indent ?? 0));
+    return uniqueIndents.size >= 3;
+  })();
+  if (!hasAnyCodes && !hasIndentHierarchy && linhas.length > 3) {
     linhas = removeChildRowsByValueSum(linhas, periodos);
   }
 
