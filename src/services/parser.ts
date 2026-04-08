@@ -340,20 +340,21 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
       normalizeWhitespace: false,
       disableCombineTextItems: false,
     });
-    const items = content.items as Array<{ str: string; transform: number[] }>;
+    const items = content.items as Array<{ str: string; transform: number[]; width?: number }>;
     if (!items || items.length === 0) return "";
 
-    // Group text items by y-coordinate (same visual line)
-    // Round y to nearest 3 units to merge items on the same line
-    const lineMap = new Map<number, Array<{ str: string; x: number }>>();
+    // Group text items by y-coordinate (same visual line).
+    // Round y to nearest 4 units (±2 tolerance) to merge items on the same line.
+    // Store width for gap-based joining.
+    const lineMap = new Map<number, Array<{ str: string; x: number; width: number }>>();
     for (const item of items) {
       if (!item.str || !item.str.trim()) continue;
       if (!item.transform || item.transform.length < 6) continue;
       const x = Math.round(item.transform[4]);
       const y = Math.round(item.transform[5]);
-      const yKey = Math.round(y / 3) * 3;
+      const yKey = Math.round(y / 4) * 4;
       if (!lineMap.has(yKey)) lineMap.set(yKey, []);
-      lineMap.get(yKey)!.push({ str: item.str, x });
+      lineMap.get(yKey)!.push({ str: item.str, x, width: item.width || 0 });
     }
 
     // Find minimum x across all text items (= left margin of this page)
@@ -365,17 +366,53 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
     }
     if (minPageX === Infinity) minPageX = 0;
 
+    // Estimate average character width from all items on the page
+    let totalWidth = 0;
+    let totalChars = 0;
+    for (const lineItems of lineMap.values()) {
+      for (const item of lineItems) {
+        if (item.width > 0 && item.str.length > 0) {
+          totalWidth += item.width;
+          totalChars += item.str.length;
+        }
+      }
+    }
+    const avgCharWidth = totalChars > 0 ? totalWidth / totalChars : 5;
+
     // Sort lines top-to-bottom (descending y in PDF coordinate system)
     const sortedLines = [...lineMap.entries()].sort((a, b) => b[0] - a[0]);
 
     const textLines: string[] = [];
     for (const [, lineItems] of sortedLines) {
       lineItems.sort((a, b) => a.x - b.x);
-      // Convert x-offset relative to page margin into leading spaces
-      // ~3 PDF units ≈ 1 character indent
+
+      // Gap-based joining: only add spaces when there's a real visual gap
+      // between text items. For monospace PDFs where each character is a
+      // separate item, this prevents "C I R C U L A N T E" artifacts.
+      let lineText = "";
+      for (let idx = 0; idx < lineItems.length; idx++) {
+        if (idx > 0) {
+          const prev = lineItems[idx - 1];
+          const prevCharW = prev.width > 0 && prev.str.length > 0
+            ? prev.width / prev.str.length
+            : avgCharWidth;
+          const prevEnd = prev.x + (prev.width > 0 ? prev.width : prev.str.length * prevCharW);
+          const gap = lineItems[idx].x - prevEnd;
+
+          if (gap > prevCharW * 1.5) {
+            // Real visual gap — add proportional spaces
+            const numSpaces = Math.max(1, Math.round(gap / prevCharW));
+            lineText += " ".repeat(numSpaces);
+          }
+          // Small or no gap: items are touching — join directly without space
+        }
+        lineText += lineItems[idx].str;
+      }
+
+      // Leading indent based on first item's x-offset from page margin
       const relativeX = Math.max(0, lineItems[0].x - minPageX);
-      const spaces = " ".repeat(Math.round(relativeX / 3));
-      textLines.push(spaces + lineItems.map(i => i.str).join(" "));
+      const indentSpaces = Math.round(relativeX / Math.max(avgCharWidth, 1));
+      textLines.push(" ".repeat(indentSpaces) + lineText);
     }
 
     return textLines.join("\n");
@@ -454,6 +491,25 @@ function detectPeriodsFromPDF(text: string): string[] {
     periods.add(m[1]);
   }
 
+  if (periods.size >= 1) {
+    return sortPeriods(periods);
+  }
+
+  // 2.5. Written dates: "31 DE DEZEMBRO DE 2024", "31 de dezembro de 2024"
+  // Common in Brazilian ERP-generated PDFs (Domínio, Alterdata, etc.)
+  const monthMap: Record<string, string> = {
+    janeiro: "01", fevereiro: "02", marco: "03", "março": "03",
+    abril: "04", maio: "05", junho: "06",
+    julho: "07", agosto: "08", setembro: "09",
+    outubro: "10", novembro: "11", dezembro: "12",
+  };
+  const writtenDatePattern = /(\d{1,2})\s+[Dd][Ee]\s+([A-Za-zÀ-ú]+)\s+[Dd][Ee]\s+(\d{4})/g;
+  for (const m of text.matchAll(writtenDatePattern)) {
+    const month = monthMap[m[2].toLowerCase()];
+    if (month) {
+      periods.add(`${m[1].padStart(2, "0")}/${month}/${m[3]}`);
+    }
+  }
   if (periods.size >= 1) {
     return sortPeriods(periods);
   }
@@ -717,6 +773,9 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
     // Extract account name: everything before the first number
     const firstNumIdx = numMatches[0].index!;
     let conta = trimmed.slice(0, firstNumIdx).trim();
+
+    // Remove DRE prefix markers: (=), (-), (+), (-)  etc.
+    conta = conta.replace(/^\s*\(?[=\-+]\)?\s*/, "").trim();
 
     // Skip lines that are just numbers (no account name)
     if (!conta || conta.length < 2) continue;
