@@ -418,12 +418,29 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
     return textLines.join("\n");
   };
 
-  const data = await pdfParse(buffer, { pagerender: renderPage });
-  const text = data.text as string;
+  // --- Dual rendering strategy ---
+  // Try the custom renderer first (preserves indentation for depth filtering).
+  // If it produces garbled text (no valid BR numbers found), fall back to
+  // pdf-parse's default renderer which is more reliable but strips indentation.
+  const customData = await pdfParse(buffer, { pagerender: renderPage });
+  const customText = customData.text as string;
+
+  // Validate: count BR numbers (e.g. "316.245.714,23") in custom text
+  const brNumberCount = (customText.match(/\d[\d.]*,\d{2}/g) || []).length;
+
+  let text: string;
+  if (brNumberCount >= 3) {
+    text = customText;
+  } else {
+    // Custom renderer failed (likely width=0 for all items) — use default
+    const defaultData = await pdfParse(buffer);
+    text = defaultData.text as string;
+  }
 
   // Detect periods from text
   const periodos = detectPeriodsFromPDF(text);
 
+  // --- Extraction pipeline ---
   // Try structured extraction first (multi-column PDF with separated names/values)
   let linhas = extractMultiColumnPDF(text, periodos);
 
