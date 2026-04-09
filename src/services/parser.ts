@@ -1,4 +1,6 @@
 import * as XLSX from "xlsx";
+import Anthropic from "@anthropic-ai/sdk";
+import { env } from "../config/env";
 
 export interface ExtractedRow {
   conta: string;
@@ -326,6 +328,57 @@ function removeChildRowsByValueSum(rows: ExtractedRow[], periodos: string[]): Ex
   return current;
 }
 
+/**
+ * OCR fallback for PDFs where text is rendered as vector paths (not as text objects).
+ * Uses Claude's document vision API to read the PDF content.
+ * Returns the text as Claude sees it, suitable for feeding into the extraction pipeline.
+ */
+async function ocrPDFWithClaude(buffer: Buffer, tipo: string): Promise<string> {
+  const client = new Anthropic({ apiKey: env.anthropicApiKey });
+  const base64 = buffer.toString("base64");
+
+  const tipoLabel = tipo.toLowerCase().includes("dre") || tipo.toLowerCase().includes("demonstra")
+    ? "Demonstração do Resultado do Exercício (DRE)"
+    : tipo.toLowerCase().includes("balan")
+      ? "Balanço Patrimonial"
+      : tipo;
+
+  const message = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 8192,
+    messages: [{
+      role: "user",
+      content: [
+        {
+          type: "document",
+          source: {
+            type: "base64",
+            media_type: "application/pdf",
+            data: base64,
+          },
+        },
+        {
+          type: "text",
+          text: `Transcreva TODOS os dados desta ${tipoLabel} em formato texto.
+
+Regras:
+- Uma conta por linha
+- Formato: NOME_DA_CONTA    VALOR1    VALOR2 (separados por espaços)
+- Inclua TODAS as contas com seus valores numéricos
+- Use os nomes exatos das contas como aparecem no documento
+- Mantenha os números no formato brasileiro: 1.234.567,89
+- Inclua as datas/períodos que aparecem no cabeçalho (ex: "31/12/2024")
+- Para valores negativos, use parênteses: (1.234,56)
+- Inclua os totais e subtotais
+- NÃO adicione explicações, apenas os dados transcritos`,
+        },
+      ],
+    }],
+  });
+
+  return message.content[0].type === "text" ? message.content[0].text : "";
+}
+
 export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocument> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const pdfParse = require("pdf-parse");
@@ -418,10 +471,10 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
     return textLines.join("\n");
   };
 
-  // --- Dual rendering strategy ---
-  // Try the custom renderer first (preserves indentation for depth filtering).
-  // If it produces garbled text (no valid BR numbers found), fall back to
-  // pdf-parse's default renderer which is more reliable but strips indentation.
+  // --- Triple rendering strategy ---
+  // 1. Try custom renderer (preserves indentation for depth filtering)
+  // 2. If custom fails, try default pdf-parse renderer
+  // 3. If both return empty text (vector-path PDFs), use Claude OCR
   const customData = await pdfParse(buffer, { pagerender: renderPage });
   const customText = customData.text as string;
 
@@ -432,9 +485,18 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
   if (brNumberCount >= 3) {
     text = customText;
   } else {
-    // Custom renderer failed (likely width=0 for all items) — use default
+    // Custom renderer failed — try default
     const defaultData = await pdfParse(buffer);
-    text = defaultData.text as string;
+    const defaultText = (defaultData.text as string).trim();
+
+    if (defaultText.length >= 20) {
+      text = defaultText;
+    } else {
+      // Both renderers returned empty/minimal text.
+      // PDF likely uses vector paths instead of text objects (common in some
+      // Brazilian accounting software). Fall back to Claude vision OCR.
+      text = await ocrPDFWithClaude(buffer, tipo);
+    }
   }
 
   // Detect periods from text
