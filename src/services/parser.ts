@@ -361,11 +361,11 @@ async function ocrPDFWithClaude(buffer: Buffer, tipo: string): Promise<string> {
           type: "text",
           text: `Transcreva TODOS os dados numéricos desta ${tipoLabel}.
 
-FORMATO OBRIGATÓRIO — uma linha por conta, sem indentação:
+FORMATO OBRIGATÓRIO — uma linha por conta:
 NOME DA CONTA    123.456.789,01
 
 REGRAS CRÍTICAS:
-1. TODAS as linhas começam na coluna 0 (SEM espaços iniciais, SEM indentação)
+1. Preserve a indentação/hierarquia do documento original usando espaços iniciais
 2. Remova prefixos como (=), (-), (+) antes do nome da conta
 3. TODAS as contas que possuem valor numérico devem aparecer, sem exceção
 4. Use formato brasileiro: 1.234.567,89 (ponto = milhar, vírgula = decimal)
@@ -537,12 +537,18 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
   // Fallback for PDFs without hierarchical codes AND where indent detection
   // didn't produce a hierarchy (e.g., all items at same x-coordinate):
   // use value-sum parent-child detection to remove detail rows.
+  // IMPORTANT: Only apply to Balance Sheet (BP), NOT to DRE/Income Statement.
+  // DRE sub-accounts (Receita Bruta, Deduções, etc.) legitimately sum to
+  // parent totals but are NOT redundant — they're all needed for analysis.
+  const isDRE = tipo.toLowerCase().includes("dre") ||
+    tipo.toLowerCase().includes("demonstra") ||
+    tipo.toLowerCase().includes("resultado");
   const hasAnyCodes = linhas.some(l => l.code);
   const hasIndentHierarchy = (() => {
     const uniqueIndents = new Set(linhas.map(l => l.indent ?? 0));
     return uniqueIndents.size >= 3;
   })();
-  if (!hasAnyCodes && !hasIndentHierarchy && linhas.length > 3) {
+  if (!isDRE && !hasAnyCodes && !hasIndentHierarchy && linhas.length > 3) {
     linhas = removeChildRowsByValueSum(linhas, periodos);
   }
 

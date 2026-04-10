@@ -642,6 +642,9 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "PRESTAÇÃO DE SERVIÇOS": "Receita Bruta de Vendas e/ou Serviços",
   "FATURAMENTO": "Receita Bruta de Vendas e/ou Serviços",
   "RECEITA DE VENDAS": "Receita Bruta de Vendas e/ou Serviços",
+  // Note: "RECEITAS OPERACIONAIS" is NOT Receita Bruta — it's the total after
+  // deductions. But in many DREs it's used as the top-level revenue line.
+  // Map to Receita Bruta only when no separate Receita Bruta line exists.
   "RECEITAS OPERACIONAIS": "Receita Bruta de Vendas e/ou Serviços",
 
   "(-) Deduções": "Deduções da Receita Bruta",
@@ -731,4 +734,15 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "LUCRO LIQUIDO": "Lucro ou Prejuízo do Período",
   "LUCRO LÍQUIDO": "Lucro ou Prejuízo do Período",
   "RESULTADO DO PERIODO": "Lucro ou Prejuízo do Período",
+  "RESULTADO DO PERÍODO": "Lucro ou Prejuízo do Período",
+  "Lucro/Prejuízo do Exercício": "Lucro ou Prejuízo do Período",
+
+  "DESPESAS NÃO OPERACIONAIS": "Resultado Não Operacional",
+
+  "CUSTO PRODUTOS MERCADORIAS E SERVIÇOS": "Custo Operacional",
+  "CUSTO DAS MERCADORIAS REVENDIDAS": "Custo Operacional",
+
+  "DEDUÇÕES DA RECEITA BRUTA": "Deduções da Receita Bruta",
+
+  "PROV P IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL": "Provisão para IR e Contribuição Social",
 };
