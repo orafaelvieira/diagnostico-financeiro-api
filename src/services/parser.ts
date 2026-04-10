@@ -359,18 +359,20 @@ async function ocrPDFWithClaude(buffer: Buffer, tipo: string): Promise<string> {
         },
         {
           type: "text",
-          text: `Transcreva TODOS os dados desta ${tipoLabel} em formato texto.
+          text: `Transcreva TODOS os dados numéricos desta ${tipoLabel}.
 
-Regras:
-- Uma conta por linha
-- Formato: NOME_DA_CONTA    VALOR1    VALOR2 (separados por espaços)
-- Inclua TODAS as contas com seus valores numéricos
-- Use os nomes exatos das contas como aparecem no documento
-- Mantenha os números no formato brasileiro: 1.234.567,89
-- Inclua as datas/períodos que aparecem no cabeçalho (ex: "31/12/2024")
-- Para valores negativos, use parênteses: (1.234,56)
-- Inclua os totais e subtotais
-- NÃO adicione explicações, apenas os dados transcritos`,
+FORMATO OBRIGATÓRIO — uma linha por conta, sem indentação:
+NOME DA CONTA    123.456.789,01
+
+REGRAS CRÍTICAS:
+1. TODAS as linhas começam na coluna 0 (SEM espaços iniciais, SEM indentação)
+2. Remova prefixos como (=), (-), (+) antes do nome da conta
+3. TODAS as contas que possuem valor numérico devem aparecer, sem exceção
+4. Use formato brasileiro: 1.234.567,89 (ponto = milhar, vírgula = decimal)
+5. Valores negativos entre parênteses: (1.234,56)
+6. Na PRIMEIRA linha, escreva o período encontrado no documento, ex: "Período: 01/01/2024 a 31/12/2024"
+7. NÃO adicione explicações, cabeçalhos extras, linhas em branco, ou markdown
+8. NÃO omita nenhuma conta — transcreva ABSOLUTAMENTE TODAS as linhas com valores`,
         },
       ],
     }],
