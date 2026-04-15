@@ -8,6 +8,7 @@ export interface ExtractedRow {
   code?: string;    // Código hierárquico do plano de contas (ex: "1.01.01")
   indent?: number;  // Nível de indentação no PDF original
   grupo?: string;   // Grupo pai detectado: "AC" | "ANC" | "PC" | "PNC" | "PL" | undefined
+  contexto?: string; // Hierarquia de linhas-pai (ex: "ATIVO > CIRCULANTE")
 }
 
 export interface ParsedDocument {
@@ -15,6 +16,120 @@ export interface ParsedDocument {
   linhas: ExtractedRow[];
   periodos: string[]; // colunas de período detectadas
   raw: string;        // representação textual para o Claude
+}
+
+// ─── Hierarchy Context Builder ────────────────────────────────────────
+// Adds `contexto` field to each ExtractedRow with up to 2 ancestor names
+// from the document hierarchy, e.g. "ATIVO > CIRCULANTE"
+
+function buildHierarchyContext(linhas: ExtractedRow[]): void {
+  if (linhas.length === 0) return;
+
+  const hasCodes = linhas.some(l => l.code);
+  const uniqueIndents = new Set(linhas.map(l => l.indent ?? 0));
+  const hasIndentHierarchy = uniqueIndents.size >= 3;
+
+  if (hasCodes) {
+    buildContextFromCodes(linhas);
+  } else if (hasIndentHierarchy) {
+    buildContextFromIndents(linhas);
+  } else {
+    buildContextFromSectionHeaders(linhas);
+  }
+}
+
+/** Strategy 1: Code-based (e.g., 1.01.01 → parent 1.01 → grandparent 1) */
+function buildContextFromCodes(linhas: ExtractedRow[]): void {
+  const codeToName = new Map<string, string>();
+  for (const l of linhas) {
+    if (l.code) codeToName.set(l.code, l.conta);
+  }
+
+  for (const l of linhas) {
+    if (!l.code) continue;
+    const ancestors: string[] = [];
+    let code = l.code;
+
+    // Walk up removing last segment: "1.01.01" → "1.01" → "1"
+    while (ancestors.length < 2) {
+      const lastDot = code.lastIndexOf(".");
+      if (lastDot <= 0) break;
+      code = code.substring(0, lastDot);
+      const parentName = codeToName.get(code);
+      if (parentName) ancestors.unshift(parentName); // prepend for top-down order
+    }
+
+    if (ancestors.length > 0) {
+      l.contexto = ancestors.join(" > ");
+    }
+  }
+}
+
+/** Strategy 2: Indent-based — walk backward to find lines with less indentation */
+function buildContextFromIndents(linhas: ExtractedRow[]): void {
+  for (let i = 0; i < linhas.length; i++) {
+    const myIndent = linhas[i].indent ?? 0;
+    if (myIndent === 0) continue; // top-level, no parent
+
+    const ancestors: string[] = [];
+    let targetIndent = myIndent;
+
+    // Walk backward, find parent (less indent), then grandparent
+    for (let j = i - 1; j >= 0 && ancestors.length < 2; j--) {
+      const jIndent = linhas[j].indent ?? 0;
+      if (jIndent < targetIndent) {
+        ancestors.unshift(linhas[j].conta); // prepend for top-down order
+        targetIndent = jIndent;
+        if (jIndent === 0) break; // reached top level
+      }
+    }
+
+    if (ancestors.length > 0) {
+      linhas[i].contexto = ancestors.join(" > ");
+    }
+  }
+}
+
+/** Strategy 3: Section-header fallback — detect ATIVO/PASSIVO/CIRCULANTE headers */
+function buildContextFromSectionHeaders(linhas: ExtractedRow[]): void {
+  const topLevelPatterns = [
+    /^A\s*T\s*I\s*V\s*O$/i,
+    /^P\s*A\s*S\s*S\s*I\s*V\s*O$/i,
+    /^ATIVO\s*(TOTAL)?$/i,
+    /^PASSIVO\s*(TOTAL)?$/i,
+    /^ATIVO\b/i,
+    /^PASSIVO\b/i,
+  ];
+
+  const midLevelPatterns = [
+    /^CIRCULANTE$/i,
+    /^N[AÃ]O\s*CIRCULANTE$/i,
+    /^ATIVO\s*CIRCULANTE$/i,
+    /^ATIVO\s*N[AÃ]O\s*CIRCULANTE$/i,
+    /^PASSIVO\s*CIRCULANTE$/i,
+    /^PASSIVO\s*N[AÃ]O\s*CIRCULANTE$/i,
+    /^PATRIM[OÔ]NIO\s*L[IÍ]QUIDO$/i,
+    /^REALIZ[AÁ]VEL\s*A?\s*LONGO\s*PRAZO$/i,
+  ];
+
+  const sectionStack: string[] = [];
+
+  for (const l of linhas) {
+    const name = l.conta.replace(/\s*R\$\s*$/, "").trim();
+    const isTopLevel = topLevelPatterns.some(p => p.test(name));
+    const isMidLevel = midLevelPatterns.some(p => p.test(name));
+
+    if (isTopLevel) {
+      sectionStack.length = 0;
+      sectionStack.push(name);
+    } else if (isMidLevel) {
+      // Keep top-level parent, replace mid-level
+      if (sectionStack.length > 1) sectionStack.length = 1;
+      sectionStack.push(name);
+    } else if (sectionStack.length > 0) {
+      l.contexto = sectionStack.join(" > ");
+    }
+  }
 }
 
 function cleanValue(val: unknown): number | null {
@@ -252,6 +367,7 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
   });
   const raw = [tipo, header, separator, ...dataRows].join("\n");
 
+  buildHierarchyContext(linhas);
   return { tipo, linhas, periodos, raw };
 }
 
@@ -555,6 +671,7 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
   // Gera raw text — sempre inclui o texto original para o Claude
   const raw = `${tipo}\n${text.slice(0, 8000)}`;
 
+  buildHierarchyContext(linhas);
   return { tipo, linhas, periodos, raw };
 }
 

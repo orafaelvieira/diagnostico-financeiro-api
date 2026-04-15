@@ -26,6 +26,7 @@ export interface Indicador {
 export interface UnmatchedAccount {
   conta: string;
   valores: Record<string, number>;
+  contexto?: string; // Hierarquia de linhas-pai (ex: "ATIVO > CIRCULANTE")
 }
 
 export interface DadosEstruturados {

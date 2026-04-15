@@ -265,7 +265,7 @@ export function mapExtractedToBP(
         nivel: Math.max(depth - 1, 2),
         editado: false,
       });
-      unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores } });
+      unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores }, ...(linha.contexto ? { contexto: linha.contexto } : {}) });
     }
   }
 
@@ -303,7 +303,7 @@ export function mapExtractedToDRE(
     const normConta = linha.conta.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
     if (DRE_SKIP_TOTALS.has(normConta)) {
       unmatchedDRE.push({ conta: linha.conta, valores: { ...linha.valores }, subtotal: false, editado: false });
-      unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores } });
+      unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores }, ...(linha.contexto ? { contexto: linha.contexto } : {}) });
       continue;
     }
     const match = findBestMatch(linha.conta, templateNames, dictionaryEntries);
@@ -323,7 +323,7 @@ export function mapExtractedToDRE(
         subtotal: false,
         editado: false,
       });
-      unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores } });
+      unmatchedAccounts.push({ conta: linha.conta, valores: { ...linha.valores }, ...(linha.contexto ? { contexto: linha.contexto } : {}) });
     }
   }
 
