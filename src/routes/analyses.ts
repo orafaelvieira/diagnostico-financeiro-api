@@ -201,33 +201,96 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       return "UNKNOWN";
     }
 
+    // Merge function: combine values from a second document into existing structured data.
+    // For each item in newItems, find the matching item in existing by `conta` name
+    // and copy over values for periods that don't exist yet.
+    function mergeBPItems(existing: BPLineItem[], newItems: BPLineItem[]): void {
+      const existingMap = new Map<string, BPLineItem>();
+      for (const item of existing) existingMap.set(item.conta, item);
+
+      for (const newItem of newItems) {
+        const target = existingMap.get(newItem.conta);
+        if (target) {
+          // Merge periods: copy new period values that don't exist in existing
+          for (const [periodo, valor] of Object.entries(newItem.valores)) {
+            if (target.valores[periodo] === undefined || target.valores[periodo] === 0) {
+              target.valores[periodo] = valor;
+            }
+          }
+        } else {
+          // New account not in existing — append it
+          existing.push(newItem);
+          existingMap.set(newItem.conta, newItem);
+        }
+      }
+    }
+
+    function mergeDREItems(existing: DRELineItem[], newItems: DRELineItem[]): void {
+      const existingMap = new Map<string, DRELineItem>();
+      for (const item of existing) existingMap.set(item.conta, item);
+
+      for (const newItem of newItems) {
+        const target = existingMap.get(newItem.conta);
+        if (target) {
+          for (const [periodo, valor] of Object.entries(newItem.valores)) {
+            if (target.valores[periodo] === undefined || target.valores[periodo] === 0) {
+              target.valores[periodo] = valor;
+            }
+          }
+        } else {
+          existing.push(newItem);
+          existingMap.set(newItem.conta, newItem);
+        }
+      }
+    }
+
     for (const doc of parsedDocs) {
       const docType = detectDocType(doc);
       console.log(`[process] Doc "${doc.tipo}" detected as ${docType}, linhas: ${doc.linhas.length}, raw length: ${doc.raw.length}`);
 
-      if ((docType === "BP" || docType === "BOTH") && structuredBP.length === 0) {
+      if (docType === "BP" || docType === "BOTH") {
         const bpResult = mapExtractedToBP(doc.linhas, dictForBP);
-        structuredBP = bpResult.items;
+        if (structuredBP.length === 0) {
+          structuredBP = bpResult.items;
+        } else {
+          // Merge new periods into existing BP structure
+          console.log(`[process] Merging additional BP document into existing (${Object.keys(bpResult.items[0]?.valores || {}).join(", ")})`);
+          mergeBPItems(structuredBP, bpResult.items);
+        }
         unmatchedAccounts.push(...bpResult.unmatched);
       }
-      if ((docType === "DRE" || docType === "BOTH") && structuredDRE.length === 0) {
+      if (docType === "DRE" || docType === "BOTH") {
         const dreResult = mapExtractedToDRE(doc.linhas, dictForDRE);
-        structuredDRE = dreResult.items;
+        if (structuredDRE.length === 0) {
+          structuredDRE = dreResult.items;
+        } else {
+          // Merge new periods into existing DRE structure
+          console.log(`[process] Merging additional DRE document into existing (${Object.keys(dreResult.items[0]?.valores || {}).join(", ")})`);
+          mergeDREItems(structuredDRE, dreResult.items);
+        }
         unmatchedAccounts.push(...dreResult.unmatched);
       }
 
       // Fallback: if docType is UNKNOWN but user said it's DRE/BP, try anyway
       if (docType === "UNKNOWN" && doc.linhas.length > 0) {
         const tipoNorm = doc.tipo.toLowerCase();
-        if ((tipoNorm.includes("dre") || tipoNorm.includes("resultado")) && structuredDRE.length === 0) {
+        if (tipoNorm.includes("dre") || tipoNorm.includes("resultado")) {
           console.log(`[process] Fallback: treating UNKNOWN doc as DRE based on tipo="${doc.tipo}"`);
           const dreResult = mapExtractedToDRE(doc.linhas, dictForDRE);
-          structuredDRE = dreResult.items;
+          if (structuredDRE.length === 0) {
+            structuredDRE = dreResult.items;
+          } else {
+            mergeDREItems(structuredDRE, dreResult.items);
+          }
           unmatchedAccounts.push(...dreResult.unmatched);
-        } else if ((tipoNorm.includes("balan") || tipoNorm.includes("balancete")) && structuredBP.length === 0) {
+        } else if (tipoNorm.includes("balan") || tipoNorm.includes("balancete")) {
           console.log(`[process] Fallback: treating UNKNOWN doc as BP based on tipo="${doc.tipo}"`);
           const bpResult = mapExtractedToBP(doc.linhas, dictForBP);
-          structuredBP = bpResult.items;
+          if (structuredBP.length === 0) {
+            structuredBP = bpResult.items;
+          } else {
+            mergeBPItems(structuredBP, bpResult.items);
+          }
           unmatchedAccounts.push(...bpResult.unmatched);
         }
       }
@@ -440,6 +503,112 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   const benford = benfordAnalysis(allValues);
 
   res.json({ ...validacao, benford });
+});
+
+// Validation report — per-document extraction stats + overall summary
+router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    include: { documents: { orderBy: { createdAt: "asc" } } },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const dados = analysis.dadosEstruturados as any as DadosEstruturados | null;
+
+  // Build per-document stats
+  const documents = analysis.documents.map((doc) => {
+    const dadosExtraidos = doc.dadosExtraidos as any;
+    const linhas: Array<{ conta: string; valores: Record<string, number> }> = dadosExtraidos?.linhas || [];
+    const periodos: string[] = dadosExtraidos?.periodos || [];
+
+    // Detect how many accounts were classified vs unmatched
+    const totalLinhas = linhas.length;
+    const contasNaoClassificadas = dados?.unmatchedAccounts?.filter((u) => {
+      // Check if this unmatched account came from this document's linhas
+      return linhas.some((l) => l.conta === u.conta);
+    }).length ?? 0;
+    const contasMapeadas = totalLinhas - contasNaoClassificadas;
+
+    // For BP documents, check if AT === PT (balance equation)
+    let balanceia: boolean | null = null;
+    let totalAtivo: number | null = null;
+    let totalPassivo: number | null = null;
+    const tipoBP = doc.tipo.toLowerCase().includes("balan") || doc.tipo.toLowerCase().includes("balancete");
+
+    if (tipoBP && dados?.bp && dados.bp.length > 0) {
+      const allPeriodos = dados.periodos || [];
+      // Check balance for each period
+      let balanced = true;
+      for (const p of allPeriodos) {
+        const at = dados.bp.find((b) => b.conta === "ATIVO TOTAL")?.valores[p] ?? 0;
+        const pt = dados.bp.find((b) => b.conta === "PASSIVO TOTAL")?.valores[p] ?? 0;
+        if (totalAtivo === null) { totalAtivo = at; totalPassivo = pt; }
+        if (Math.abs(at - pt) > 1) balanced = false; // tolerance of R$1
+      }
+      balanceia = balanced;
+    }
+
+    // Determine document status
+    let status: "ok" | "warning" | "error" = "ok";
+    const issues: string[] = [];
+
+    if (totalLinhas === 0) {
+      status = "error";
+      issues.push("Nenhuma linha extraída do documento");
+    }
+    if (periodos.length === 0 && totalLinhas > 0) {
+      status = "warning";
+      issues.push("Nenhum período detectado");
+    }
+    if (contasNaoClassificadas > 0) {
+      if (contasNaoClassificadas > totalLinhas * 0.5) {
+        status = status === "error" ? "error" : "warning";
+      }
+      issues.push(`${contasNaoClassificadas} conta(s) não classificada(s)`);
+    }
+    if (balanceia === false) {
+      status = status === "error" ? "error" : "warning";
+      issues.push(`Ativo Total ≠ Passivo Total (AT=${totalAtivo?.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}, PT=${totalPassivo?.toLocaleString("pt-BR", { minimumFractionDigits: 2 })})`);
+    }
+    if (doc.status === "Erro") {
+      status = "error";
+      issues.push("Erro durante processamento");
+    }
+
+    return {
+      id: doc.id,
+      nome: doc.nome,
+      tipo: doc.tipo,
+      status,
+      issues,
+      stats: {
+        linhasExtraidas: totalLinhas,
+        periodosDetectados: periodos,
+        contasMapeadas,
+        contasNaoClassificadas,
+        ...(tipoBP ? { totalAtivo, totalPassivo, balanceia } : {}),
+      },
+      confianca: doc.confianca ?? null,
+    };
+  });
+
+  // Overall summary
+  const allPeriodos = dados?.periodos || [];
+  const totalMapeadas = documents.reduce((sum, d) => sum + d.stats.contasMapeadas, 0);
+  const totalLinhas = documents.reduce((sum, d) => sum + d.stats.linhasExtraidas, 0);
+  const taxaClassificacao = totalLinhas > 0 ? Math.round((totalMapeadas / totalLinhas) * 1000) / 10 : 0;
+
+  res.json({
+    documents,
+    overall: {
+      periodosTotal: allPeriodos,
+      documentosProcessados: documents.length,
+      documentosComErro: documents.filter((d) => d.status === "error").length,
+      documentosComAlerta: documents.filter((d) => d.status === "warning").length,
+      taxaClassificacao,
+    },
+  });
 });
 
 export default router;

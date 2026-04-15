@@ -8,6 +8,23 @@ import { uploadFile, deleteFile } from "../services/storage";
 const router = Router();
 router.use(requireAuth);
 
+/**
+ * Fix multer filename encoding: when the browser sends UTF-8 filenames,
+ * multer may interpret the bytes as Latin-1, producing mojibake
+ * (e.g., "AÃ§ÃoCorretora" instead of "AçãoCorretora").
+ * Re-encode from latin1→utf8 to recover the correct characters.
+ */
+function fixFilename(raw: string): string {
+  try {
+    const fixed = Buffer.from(raw, "latin1").toString("utf8");
+    // Verify it produced valid UTF-8 (no replacement chars that weren't in original)
+    if (!fixed.includes("\uFFFD") || raw.includes("\uFFFD")) return fixed;
+  } catch {
+    // If conversion fails, return original
+  }
+  return raw;
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
@@ -54,8 +71,8 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, userId: req.userId! } });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
 
-  const ext = req.file.originalname.split(".").pop();
-  const key = `uploads/${req.userId}/${analysisId}/${Date.now()}-${req.file.originalname}`;
+  const nome = fixFilename(req.file.originalname);
+  const key = `uploads/${req.userId}/${analysisId}/${Date.now()}-${nome}`;
   const storagePath = await uploadFile(req.file.buffer, key, req.file.mimetype);
 
   const tamanho = req.file.size > 1024 * 1024
@@ -66,7 +83,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
     data: {
       analysisId,
       companyId,
-      nome: req.file.originalname,
+      nome,
       tipo,
       competencia,
       moeda,
