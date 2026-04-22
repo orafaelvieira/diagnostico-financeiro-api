@@ -5,6 +5,23 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { deleteFile } from "../services/storage";
 
 const router = Router();
+
+// CNPJ lookup proxy — avoids CORS issues when frontend calls BrasilAPI directly
+router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void> => {
+  const digits = (req.params.cnpj as string).replace(/\D/g, "");
+  if (digits.length !== 14) { res.status(400).json({ error: "CNPJ inválido" }); return; }
+
+  try {
+    const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`);
+    if (response.status === 404) { res.status(404).json({ error: "CNPJ não encontrado na Receita Federal" }); return; }
+    if (!response.ok) { res.status(502).json({ error: "Erro ao consultar CNPJ" }); return; }
+    const data = await response.json();
+    res.json(data);
+  } catch {
+    res.status(502).json({ error: "Falha ao conectar com a Receita Federal" });
+  }
+});
+
 router.use(requireAuth);
 
 const companySchema = z.object({
