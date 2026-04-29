@@ -18,6 +18,22 @@ const analysisSchema = z.object({
   nome: z.string().min(2),
   periodo: z.string().optional(),
   tipo: z.enum(["Completa", "Rápida"]).default("Completa"),
+  kind: z.enum(["ibr", "diagnostico"]).default("diagnostico"),
+  ibrType: z.enum(["light", "full", "crisis"]).optional(),
+  sectorId: z.string().optional(),
+  documentChecklist: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    status: z.enum(["have", "requested", "na", "uploaded", "approved", "rejected", "pending"]),
+  })).optional(),
+  engagement: z.object({
+    requestedBy: z.string().min(2),
+    requestedByType: z.enum(["lender", "investor", "advisor", "other"]).default("lender"),
+    scope: z.string().default(""),
+    deadline: z.string().optional(),
+    feeAmount: z.number().optional(),
+    feeCurrency: z.string().default("BRL"),
+  }).optional(),
 });
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
@@ -42,9 +58,40 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
+  const { engagement, documentChecklist, ...analysisData } = parsed.data;
+
   const analysis = await prisma.analysis.create({
-    data: { ...parsed.data, userId: req.userId! },
+    data: {
+      companyId: analysisData.companyId,
+      nome: analysisData.nome,
+      periodo: analysisData.periodo,
+      tipo: analysisData.tipo,
+      kind: analysisData.kind,
+      ibrType: analysisData.ibrType,
+      sectorId: analysisData.sectorId,
+      documentChecklist: documentChecklist as object | undefined,
+      userId: req.userId!,
+    },
   });
+
+  // Cria Engagement vinculado quando IBR.
+  if (parsed.data.kind === "ibr" && engagement) {
+    await prisma.engagement.create({
+      data: {
+        analysisId: analysis.id,
+        userId: req.userId!,
+        companyName: company.nomeFantasia ?? company.razaoSocial,
+        requestedBy: engagement.requestedBy,
+        requestedByType: engagement.requestedByType,
+        scope: engagement.scope,
+        deadline: engagement.deadline ? new Date(engagement.deadline) : null,
+        feeAmount: engagement.feeAmount,
+        feeCurrency: engagement.feeCurrency,
+        state: "kicked_off",
+      },
+    });
+  }
+
   res.status(201).json(analysis);
 });
 

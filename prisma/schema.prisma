@@ -8,16 +8,21 @@ datasource db {
 }
 
 model User {
-  id            String     @id @default(uuid())
-  email         String     @unique
-  name          String
-  passwordHash  String     @map("password_hash")
-  workspaceType String     @default("consultoria") @map("workspace_type")
-  createdAt     DateTime   @default(now()) @map("created_at")
+  id                      String     @id @default(uuid())
+  email                   String     @unique
+  name                    String
+  passwordHash            String     @map("password_hash")
+  workspaceType           String     @default("consultoria") @map("workspace_type")
+  role                    String?
+  professionalRegistration String?   @map("professional_registration")
+  createdAt               DateTime   @default(now()) @map("created_at")
 
-  companies    Company[]
-  analyses     Analysis[]
-  dictionaries AccountDictionary[]
+  companies        Company[]
+  analyses         Analysis[]
+  dictionaries     AccountDictionary[]
+  auditEvents      AuditEvent[]
+  timeEntries      TimeEntry[]
+  ownedEngagements Engagement[] @relation("EngagementRT")
 
   @@map("users")
 }
@@ -60,21 +65,36 @@ model Company {
 }
 
 model Analysis {
-  id        String   @id @default(uuid())
-  companyId String   @map("company_id")
-  userId    String   @map("user_id")
-  nome      String
-  periodo   String?
-  tipo      String   @default("Completa")
-  status    String   @default("Rascunho")
-  confianca Int?
+  id                String   @id @default(uuid())
+  companyId         String   @map("company_id")
+  userId            String   @map("user_id")
+  nome              String
+  periodo           String?
+  tipo              String   @default("Completa")
+  status            String   @default("Rascunho")
+  confianca         Int?
+  kind              String   @default("diagnostico")
+  ibrType           String?  @map("ibr_type")
+  sectorId          String?  @map("sector_id")
+  reviewState       String   @default("draft") @map("review_state")
   resultado         Json?
   dadosEstruturados Json?    @map("dados_estruturados")
+  documentChecklist Json?    @map("document_checklist")
+  stcf              Json?
+  scenarios         Json?
+  options           Json?
+  executiveSummary  Json?    @map("executive_summary")
+  reviewMeta        Json?    @map("review_meta")
+  signature         Json?
+  questionnaire     Json?
   createdAt         DateTime @default(now()) @map("created_at")
 
-  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user      User       @relation(fields: [userId], references: [id])
-  documents Document[]
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user        User         @relation(fields: [userId], references: [id])
+  documents   Document[]
+  engagement  Engagement?
+  auditEvents AuditEvent[]
+  timeEntries TimeEntry[]
 
   @@map("analyses")
 }
@@ -90,6 +110,7 @@ model Document {
   status         String   @default("Pendente")
   confianca      Int?
   storagePath    String?  @map("storage_path")
+  hash           String?
   dadosExtraidos     Json?    @map("dados_extraidos")
   editadoManualmente Boolean  @default(false) @map("editado_manualmente")
   tamanho            String?
@@ -99,4 +120,88 @@ model Document {
   company  Company  @relation(fields: [companyId], references: [id])
 
   @@map("documents")
+}
+
+model Engagement {
+  id                String   @id @default(uuid())
+  analysisId        String?  @unique @map("analysis_id")
+  userId            String   @map("user_id")
+  rtId              String?  @map("rt_id")
+  companyName       String   @map("company_name")
+  requestedBy       String   @map("requested_by")
+  requestedByType   String   @map("requested_by_type")
+  scope             String   @default("")
+  state             String   @default("lead")
+  deadline          DateTime?
+  feeAmount         Float?   @map("fee_amount")
+  feeCurrency       String   @default("BRL") @map("fee_currency")
+  signedAt          DateTime? @map("signed_at")
+  proposalUrl       String?  @map("proposal_url")
+  contractUrls      Json?    @map("contract_urls")
+  notes             String?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  analysis Analysis? @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  rt       User?     @relation("EngagementRT", fields: [rtId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([state])
+  @@map("engagements")
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  analysisId String   @map("analysis_id")
+  userId     String   @map("user_id")
+  userName   String   @map("user_name")
+  entity     String
+  entityId   String?  @map("entity_id")
+  field      String
+  before     Json?
+  after      Json?
+  source     String   @default("manual")
+  reason     String?
+  timestamp  DateTime @default(now())
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@index([analysisId, timestamp])
+  @@index([entity])
+  @@map("audit_events")
+}
+
+model TimeEntry {
+  id         String   @id @default(uuid())
+  analysisId String   @map("analysis_id")
+  userId     String   @map("user_id")
+  phase      String
+  date       DateTime
+  hours      Float
+  notes      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@index([analysisId, date])
+  @@index([userId])
+  @@map("time_entries")
+}
+
+model Lead {
+  id              String   @id @default(uuid())
+  targetCompany   String   @map("target_company")
+  reason          String
+  debtVolume      String?  @map("debt_volume")
+  desiredDeadline DateTime? @map("desired_deadline")
+  contactName     String?  @map("contact_name")
+  contactEmail    String   @map("contact_email")
+  notes           String?
+  status          String   @default("new")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([status, createdAt])
+  @@map("leads")
 }

@@ -1,0 +1,395 @@
+import { Router, Response } from "express";
+import { z } from "zod";
+import crypto from "crypto";
+import { prisma } from "../db/client";
+import { requireAuth, AuthRequest } from "../middleware/auth";
+
+const router = Router({ mergeParams: true });
+router.use(requireAuth);
+
+async function loadAnalysis(req: AuthRequest) {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") return null;
+  return prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+  });
+}
+
+/* ─────────────  STCF  ───────────── */
+
+router.get("/:id/stcf", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const scenarioId = (req.query.scenarioId as string) || "base";
+  const stcf = (analysis.stcf as Record<string, unknown> | null) ?? null;
+  if (stcf && (stcf as { scenarioId?: string }).scenarioId === scenarioId) {
+    res.json(stcf);
+    return;
+  }
+  res.status(404).json({ error: "Forecast não encontrado para o cenário" });
+});
+
+router.put("/:id/stcf", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const updated = await prisma.analysis.update({
+    where: { id: analysis.id },
+    data: { stcf: req.body },
+  });
+  res.json(updated.stcf);
+});
+
+/* ─────────────  Cenários  ───────────── */
+
+router.get("/:id/scenarios", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  res.json(analysis.scenarios ?? []);
+});
+
+router.put("/:id/scenarios", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const updated = await prisma.analysis.update({
+    where: { id: analysis.id },
+    data: { scenarios: req.body },
+  });
+  res.json(updated.scenarios);
+});
+
+/* ─────────────  Opções estratégicas  ───────────── */
+
+const optionSchema = z.object({
+  pillar: z.enum(["strategic_repositioning", "value_focused_business_model", "operational_excellence", "financial_restructuring"]),
+  title: z.string().min(2),
+  description: z.string().default(""),
+  estimatedImpactBRL: z.number().optional(),
+  horizonMonths: z.number().optional(),
+  effort: z.enum(["low", "medium", "high"]).default("medium"),
+  owner: z.string().optional(),
+  priority: z.enum(["p0", "p1", "p2"]).default("p1"),
+});
+
+router.get("/:id/options", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  res.json(analysis.options ?? []);
+});
+
+router.post("/:id/options", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const parsed = optionSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const current = (analysis.options as unknown[] | null) ?? [];
+  const created = { id: crypto.randomUUID(), ...parsed.data };
+  const updated = await prisma.analysis.update({
+    where: { id: analysis.id },
+    data: { options: [...current, created] as unknown as object },
+  });
+  res.status(201).json(created);
+});
+
+/* ─────────────  Sumário Executivo  ───────────── */
+
+const summarySchema = z.object({
+  recommendationToLender: z.enum(["continue_support", "restructure", "accelerated_ma", "wind_down", "undecided"]),
+  rationale: z.string().default(""),
+  keyRisks: z.array(z.string()).default([]),
+  keyMitigations: z.array(z.string()).default([]),
+  liquidityRunwayWeeks: z.number().optional(),
+  covenantHeadroom: z.number().optional(),
+});
+
+router.get("/:id/executive-summary", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  res.json(analysis.executiveSummary ?? null);
+});
+
+router.put("/:id/executive-summary", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const parsed = summarySchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const updated = await prisma.analysis.update({
+    where: { id: analysis.id },
+    data: { executiveSummary: parsed.data },
+  });
+  res.json(updated.executiveSummary);
+});
+
+/* ─────────────  Engagement embed (legado, no Analysis)  ───────────── */
+
+router.get("/:id/engagement", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+  const eng = await prisma.engagement.findFirst({
+    where: { analysisId: id, userId: req.userId! },
+  });
+  res.json(eng);
+});
+
+/* ─────────────  Workflow de revisão  ───────────── */
+
+const VALID_TRANSITIONS: Record<string, { to: string; requirePerm?: string }[]> = {
+  draft: [{ to: "in_review", requirePerm: "ibr.edit" }],
+  in_review: [
+    { to: "approved", requirePerm: "ibr.review" },
+    { to: "revision_requested", requirePerm: "ibr.review" },
+  ],
+  revision_requested: [{ to: "in_review", requirePerm: "ibr.edit" }],
+  approved: [{ to: "signed", requirePerm: "ibr.sign" }, { to: "draft", requirePerm: "ibr.sign" }],
+  signed: [{ to: "delivered", requirePerm: "ibr.sign" }, { to: "draft", requirePerm: "ibr.sign" }],
+  delivered: [],
+};
+
+const TRANSITION_TO_STATE: Record<string, { from: string[]; to: string }> = {
+  submit_for_review: { from: ["draft"], to: "in_review" },
+  request_revision: { from: ["in_review"], to: "revision_requested" },
+  resubmit: { from: ["revision_requested"], to: "in_review" },
+  approve: { from: ["in_review"], to: "approved" },
+  sign: { from: ["approved"], to: "signed" },
+  deliver: { from: ["signed"], to: "delivered" },
+  reopen: { from: ["approved", "signed", "delivered"], to: "draft" },
+};
+
+router.get("/:id/review", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const meta = (analysis.reviewMeta as Record<string, unknown> | null) ?? {};
+  res.json({
+    state: analysis.reviewState,
+    transitions: (meta.transitions as unknown[]) ?? [],
+    comments: (meta.comments as unknown[]) ?? [],
+    signature: analysis.signature ?? undefined,
+  });
+});
+
+router.post("/:id/review/transition", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const action = (req.body?.action as string) || "";
+  const t = TRANSITION_TO_STATE[action];
+  if (!t) { res.status(400).json({ error: "Transição inválida" }); return; }
+  if (!t.from.includes(analysis.reviewState)) {
+    res.status(409).json({ error: `Transição '${action}' não permitida do estado '${analysis.reviewState}'` });
+    return;
+  }
+  const user = await prisma.user.findUnique({ where: { id: req.userId! } });
+  const meta = (analysis.reviewMeta as Record<string, unknown> | null) ?? {};
+  const transitions = ((meta.transitions as unknown[]) ?? []).slice() as Record<string, unknown>[];
+  transitions.push({
+    id: crypto.randomUUID(),
+    analysisId: analysis.id,
+    fromState: analysis.reviewState,
+    toState: t.to,
+    by: user?.name ?? req.userId,
+    byRole: user?.role ?? "operator",
+    timestamp: new Date().toISOString(),
+    reason: req.body?.reason,
+  });
+  const updated = await prisma.analysis.update({
+    where: { id: analysis.id },
+    data: {
+      reviewState: t.to,
+      reviewMeta: { ...meta, transitions } as object,
+    },
+  });
+  const newMeta = (updated.reviewMeta as Record<string, unknown> | null) ?? {};
+  res.json({
+    state: updated.reviewState,
+    transitions: (newMeta.transitions as unknown[]) ?? [],
+    comments: (newMeta.comments as unknown[]) ?? [],
+    signature: updated.signature ?? undefined,
+  });
+});
+
+router.post("/:id/review/comments", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const body = (req.body?.body as string) || "";
+  if (!body.trim()) { res.status(400).json({ error: "Comentário vazio" }); return; }
+  const user = await prisma.user.findUnique({ where: { id: req.userId! } });
+  const meta = (analysis.reviewMeta as Record<string, unknown> | null) ?? {};
+  const comments = ((meta.comments as unknown[]) ?? []).slice() as Record<string, unknown>[];
+  comments.push({
+    id: crypto.randomUUID(),
+    analysisId: analysis.id,
+    authorId: req.userId,
+    authorName: user?.name ?? "Usuário",
+    authorRole: user?.role ?? "operator",
+    timestamp: new Date().toISOString(),
+    body: body.trim(),
+    anchor: req.body?.anchor,
+  });
+  const updated = await prisma.analysis.update({
+    where: { id: analysis.id },
+    data: { reviewMeta: { ...meta, comments } as object },
+  });
+  const newMeta = (updated.reviewMeta as Record<string, unknown> | null) ?? {};
+  res.json({
+    state: updated.reviewState,
+    transitions: (newMeta.transitions as unknown[]) ?? [],
+    comments: (newMeta.comments as unknown[]) ?? [],
+    signature: updated.signature ?? undefined,
+  });
+});
+
+/* ─────────────  Assinatura RT  ───────────── */
+
+router.post("/:id/sign", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const user = await prisma.user.findUnique({ where: { id: req.userId! } });
+  if (user?.role !== "partner") {
+    res.status(403).json({ error: "Apenas Partner (RT) pode assinar" });
+    return;
+  }
+  if (analysis.reviewState !== "approved") {
+    res.status(409).json({ error: "IBR precisa estar 'approved' para ser assinado" });
+    return;
+  }
+  const registration = (req.body?.professionalRegistration as string) || "";
+  if (!registration.trim()) {
+    res.status(400).json({ error: "Registro profissional obrigatório" });
+    return;
+  }
+
+  // Hash do conteúdo: estabilizamos o snapshot dos campos analíticos.
+  const snapshot = JSON.stringify({
+    dadosEstruturados: analysis.dadosEstruturados,
+    stcf: analysis.stcf,
+    scenarios: analysis.scenarios,
+    options: analysis.options,
+    executiveSummary: analysis.executiveSummary,
+    documentChecklist: analysis.documentChecklist,
+  });
+  const contentHash = crypto.createHash("sha256").update(snapshot).digest("hex");
+
+  const signature = {
+    id: crypto.randomUUID(),
+    analysisId: analysis.id,
+    partnerId: user.id,
+    partnerName: user.name,
+    professionalRegistration: registration.trim(),
+    contentHashSha256: contentHash,
+    signedAt: new Date().toISOString(),
+  };
+
+  const meta = (analysis.reviewMeta as Record<string, unknown> | null) ?? {};
+  const transitions = ((meta.transitions as unknown[]) ?? []).slice() as Record<string, unknown>[];
+  transitions.push({
+    id: crypto.randomUUID(),
+    analysisId: analysis.id,
+    fromState: "approved",
+    toState: "signed",
+    by: user.name,
+    byRole: "partner",
+    timestamp: new Date().toISOString(),
+  });
+
+  await prisma.analysis.update({
+    where: { id: analysis.id },
+    data: {
+      signature,
+      reviewState: "signed",
+      reviewMeta: { ...meta, transitions } as object,
+    },
+  });
+
+  res.status(201).json(signature);
+});
+
+/* ─────────────  Audit trail (lista por análise)  ───────────── */
+
+router.get("/:id/audit", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const limit = Math.min(parseInt(String(req.query.limit ?? "200")) || 200, 500);
+  const offset = parseInt(String(req.query.offset ?? "0")) || 0;
+  const entity = req.query.entity as string | undefined;
+  const events = await prisma.auditEvent.findMany({
+    where: { analysisId: analysis.id, ...(entity ? { entity } : {}) },
+    orderBy: { timestamp: "desc" },
+    take: limit,
+    skip: offset,
+  });
+  res.json(events);
+});
+
+/* ─────────────  Time tracking  ───────────── */
+
+const timeEntrySchema = z.object({
+  phase: z.enum(["engagement", "collection", "analysis", "review", "delivery"]),
+  hours: z.number().positive(),
+  date: z.string(),
+  notes: z.string().optional(),
+});
+
+router.post("/:id/time", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const parsed = timeEntrySchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const entry = await prisma.timeEntry.create({
+    data: {
+      analysisId: analysis.id,
+      userId: req.userId!,
+      phase: parsed.data.phase,
+      hours: parsed.data.hours,
+      date: new Date(parsed.data.date),
+      notes: parsed.data.notes,
+    },
+  });
+  res.status(201).json(entry);
+});
+
+router.get("/:id/time/summary", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const entries = await prisma.timeEntry.findMany({
+    where: { analysisId: analysis.id },
+    include: { user: { select: { name: true } } },
+  });
+
+  const hoursByPhase: Record<string, number> = {
+    engagement: 0,
+    collection: 0,
+    analysis: 0,
+    review: 0,
+    delivery: 0,
+  };
+  const userMap = new Map<string, { userId: string; userName: string; hours: number }>();
+  let totalHours = 0;
+  for (const e of entries) {
+    hoursByPhase[e.phase] = (hoursByPhase[e.phase] ?? 0) + e.hours;
+    totalHours += e.hours;
+    const existing = userMap.get(e.userId);
+    if (existing) existing.hours += e.hours;
+    else userMap.set(e.userId, { userId: e.userId, userName: e.user.name, hours: e.hours });
+  }
+
+  // Margem se houver engagement com fee
+  const engagement = await prisma.engagement.findFirst({
+    where: { analysisId: analysis.id },
+  });
+  const HOURLY_COST = 350; // BRL — assumption interna; backend pode tornar configurável
+  const estimatedCost = totalHours * HOURLY_COST;
+  const feeAmount = engagement?.feeAmount ?? undefined;
+  const marginAmount = feeAmount != null ? feeAmount - estimatedCost : undefined;
+  const marginPct = feeAmount && feeAmount > 0 ? (marginAmount! / feeAmount) : undefined;
+
+  res.json({
+    analysisId: analysis.id,
+    totalHours,
+    hoursByPhase,
+    hoursByUser: Array.from(userMap.values()),
+    estimatedCost,
+    feeAmount,
+    marginAmount,
+    marginPct,
+  });
+});
+
+export default router;

@@ -6,8 +6,14 @@ import { env } from "./config/env";
 import authRouter from "./routes/auth";
 import companiesRouter from "./routes/companies";
 import analysesRouter from "./routes/analyses";
+import ibrRouter from "./routes/ibr";
 import documentsRouter from "./routes/documents";
 import dictionaryRouter from "./routes/dictionary";
+import auditRouter from "./routes/audit";
+import engagementsRouter from "./routes/engagements";
+import operationsRouter from "./routes/operations";
+import clientPortalRouter from "./routes/client-portal";
+import leadsRouter from "./routes/leads";
 
 const app = express();
 
@@ -16,18 +22,27 @@ app.use(cors({
     env.frontendUrl,
     "https://walrus-app-bizfv.ondigitalocean.app",
     "http://localhost:5173",
+    "http://localhost:5174",
   ],
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: "5mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use("/auth", authRouter);
 app.use("/companies", companiesRouter);
+// IBR routes nested under /analyses (stcf, scenarios, options, summary, review,
+// sign, audit, time). Mounted before main analyses to share the same prefix.
+app.use("/analyses", ibrRouter);
 app.use("/analyses", analysesRouter);
 app.use("/documents", documentsRouter);
 app.use("/dictionary", dictionaryRouter);
+app.use("/audit", auditRouter);
+app.use("/engagements", engagementsRouter);
+app.use("/operations", operationsRouter);
+app.use("/client-portal", clientPortalRouter);
+app.use("/leads", leadsRouter);
 
 app.listen(env.port, () => {
   console.log(`Server running on port ${env.port}`);
