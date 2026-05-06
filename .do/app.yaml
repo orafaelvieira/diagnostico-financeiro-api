@@ -1,4 +1,4 @@
-name: diagnostico-financeiro-api
+name: quantua-api
 region: nyc
 
 services:
@@ -26,7 +26,7 @@ services:
         type: SECRET
       - key: FRONTEND_URL
         scope: RUN_TIME
-        value: https://diagnostico-financeiro-app.ondigitalocean.app
+        value: https://walrus-app-bizfv.ondigitalocean.app
       - key: SPACES_ENDPOINT
         scope: RUN_TIME
         type: SECRET
