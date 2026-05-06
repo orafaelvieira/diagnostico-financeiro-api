@@ -4,7 +4,7 @@ region: nyc
 services:
   - name: api
     github:
-      repo: orafaelvieira/diagnostico-financeiro-api
+      repo: orafaelvieira/quantua-api
       branch: main
       deploy_on_push: true
     build_command: npm install && npm run build && npx prisma generate
